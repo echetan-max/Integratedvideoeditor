@@ -48,7 +48,11 @@ export const Timeline: React.FC<TimelineProps> = ({
   };
 
   const getPositionFromTime = (time: number): number => {
-    return (time / duration) * 100;
+    // Ensure time is within valid range and duration is not zero
+    if (duration <= 0) return 0;
+    const position = (time / duration) * 100;
+    console.log('Position calculation:', { time, duration, position });
+    return Math.max(0, Math.min(100, position));
   };
 
   const handleMouseDown = (e: React.MouseEvent, type: 'playhead' | 'zoom-start' | 'zoom-end' | 'zoom-move', zoom?: ZoomEffect) => {
@@ -162,58 +166,76 @@ export const Timeline: React.FC<TimelineProps> = ({
           ))}
         </div>
 
-        {/* Zoom effects */}
-        {zoomEffects.map((zoom) => (
-          <div
-            key={zoom.id}
-            className={`absolute top-4 h-8 rounded cursor-pointer transition-all group ${
-              selectedZoom?.id === zoom.id 
-                ? 'bg-purple-500 ring-2 ring-purple-300' 
-                : 'bg-purple-600 hover:bg-purple-500'
-            }`}
-            style={{
-              left: `${getPositionFromTime(zoom.startTime)}%`,
-              width: `${getPositionFromTime(zoom.endTime - zoom.startTime)}%`
-            }}
-            onClick={(e) => {
-              e.stopPropagation();
-              onSelectZoom(zoom);
-            }}
-            onMouseDown={(e) => handleMouseDown(e, 'zoom-move', zoom)}
-          >
-            {/* Resize handles */}
-            <div
-              className="absolute left-0 top-0 w-2 h-full cursor-w-resize bg-purple-400 opacity-0 hover:opacity-100"
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                handleMouseDown(e, 'zoom-start', zoom);
-              }}
-            />
-            <div
-              className="absolute right-0 top-0 w-2 h-full cursor-e-resize bg-purple-400 opacity-0 hover:opacity-100"
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                handleMouseDown(e, 'zoom-end', zoom);
-              }}
-            />
+        {/* Zoom effects container */}
+        <div className="absolute inset-x-0 top-4 bottom-0">
+          {zoomEffects.map((zoom) => {
+            const isAutoZoom = zoom.type === 'autozoom';
+            const startPos = getPositionFromTime(zoom.startTime);
+            const width = getPositionFromTime(zoom.endTime - zoom.startTime);
             
-            {/* Delete button - appears on hover */}
-            <button
-              className="absolute left-1 top-1 w-4 h-4 bg-red-600 hover:bg-red-700 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDeleteZoom(zoom.id);
-              }}
-              title="Delete zoom"
-            >
-              ×
-            </button>
+            console.log('Rendering zoom effect:', { id: zoom.id, type: zoom.type, startPos, width });
             
-            <div className="px-2 py-1 text-xs text-white truncate">
-              Zoom {zoom.scale}x
-            </div>
-          </div>
-        ))}
+            return (
+              <div
+                key={zoom.id}
+                className={`absolute h-8 rounded cursor-pointer transition-all group ${
+                  selectedZoom?.id === zoom.id
+                    ? isAutoZoom
+                      ? 'bg-blue-500 ring-2 ring-blue-300'
+                      : 'bg-purple-500 ring-2 ring-purple-300'
+                    : isAutoZoom
+                      ? 'bg-blue-600 hover:bg-blue-500'
+                      : 'bg-purple-600 hover:bg-purple-500'
+                }`}
+                style={{
+                  left: `${startPos}%`,
+                  width: `${width}%`
+                }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectZoom(zoom);
+                }}
+                onMouseDown={(e) => handleMouseDown(e, 'zoom-move', zoom)}
+              >
+                {/* Resize handles */}
+                <div
+                  className={`absolute left-0 top-0 w-2 h-full cursor-w-resize opacity-0 hover:opacity-100 ${
+                    isAutoZoom ? 'bg-blue-400' : 'bg-purple-400'
+                  }`}
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    handleMouseDown(e, 'zoom-start', zoom);
+                  }}
+                />
+                <div
+                className={`absolute right-0 top-0 w-2 h-full cursor-e-resize opacity-0 hover:opacity-100 ${
+                  isAutoZoom ? 'bg-blue-400' : 'bg-purple-400'
+                }`}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  handleMouseDown(e, 'zoom-end', zoom);
+                }}
+              />
+              {/* Delete button - appears on hover */}
+              <button
+                className="absolute left-1 top-1 w-4 h-4 bg-red-600 hover:bg-red-700 text-white text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDeleteZoom(zoom.id);
+                }}
+                title="Delete zoom"
+              >
+                ×
+              </button>
+              <div className="px-2 py-1 text-xs text-white truncate flex items-center space-x-1">
+                  <span>{isAutoZoom ? '🤖' : '🔍'}</span>
+                  <span>Zoom {zoom.scale}x</span>
+                  {isAutoZoom && <span className="text-blue-200">(Auto)</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
 
         {/* Playhead */}
         <div

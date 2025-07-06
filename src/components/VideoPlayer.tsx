@@ -1,6 +1,6 @@
 import React, { forwardRef, useEffect, useRef, useState, useImperativeHandle } from 'react';
 import { Play, Pause, Volume2, Maximize, VolumeX } from 'lucide-react';
-import { ZoomEffect } from '../types';
+import { ZoomEffect, TextOverlay } from '../types';
 
 interface VideoPlayerProps {
   src: string;
@@ -11,6 +11,7 @@ interface VideoPlayerProps {
   onPlay: () => void;
   onPause: () => void;
   currentZoom: ZoomEffect | null;
+  textOverlays: TextOverlay[];
   onVideoClick: (x: number, y: number) => void;
 }
 
@@ -21,7 +22,7 @@ export interface VideoPlayerRef {
 }
 
 export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
-  ({ src, currentTime, isPlaying, onTimeUpdate, onLoadedMetadata, onPlay, onPause, currentZoom, onVideoClick }, ref) => {
+  ({ src, currentTime, isPlaying, onTimeUpdate, onLoadedMetadata, onPlay, onPause, currentZoom, textOverlays, onVideoClick }, ref) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const videoWrapperRef = useRef<HTMLDivElement>(null);
@@ -29,6 +30,8 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     const [isMuted, setIsMuted] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [isVideoReady, setIsVideoReady] = useState(false);
+    const [videoError, setVideoError] = useState<string | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
 
     useImperativeHandle(ref, () => ({
       play: () => {
@@ -53,7 +56,15 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       if (!video) return;
 
       const handleLoadedMetadata = () => {
+        console.log('Video metadata loaded:', {
+          duration: video.duration,
+          videoWidth: video.videoWidth,
+          videoHeight: video.videoHeight,
+          src: video.src
+        });
         setIsVideoReady(true);
+        setVideoError(null);
+        setIsLoading(false);
         onLoadedMetadata(video.duration);
       };
 
@@ -70,7 +81,25 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       };
 
       const handleLoadedData = () => {
+        console.log('Video data loaded successfully');
         setIsVideoReady(true);
+      };
+
+      const handleError = (e: Event) => {
+        console.error('Video loading error:', e);
+        console.error('Video error details:', video.error);
+        console.error('Video src:', video.src);
+        const errorMessage = video.error?.message || 'Unknown error';
+        setVideoError(errorMessage);
+        alert(`Error loading video: ${errorMessage}`);
+      };
+
+      const handleCanPlay = () => {
+        console.log('Video can play');
+      };
+
+      const handleCanPlayThrough = () => {
+        console.log('Video can play through');
       };
 
       video.addEventListener('loadedmetadata', handleLoadedMetadata);
@@ -78,6 +107,9 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       video.addEventListener('play', handlePlay);
       video.addEventListener('pause', handlePause);
       video.addEventListener('loadeddata', handleLoadedData);
+      video.addEventListener('error', handleError);
+      video.addEventListener('canplay', handleCanPlay);
+      video.addEventListener('canplaythrough', handleCanPlayThrough);
 
       return () => {
         video.removeEventListener('loadedmetadata', handleLoadedMetadata);
@@ -85,8 +117,19 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         video.removeEventListener('play', handlePlay);
         video.removeEventListener('pause', handlePause);
         video.removeEventListener('loadeddata', handleLoadedData);
+        video.removeEventListener('error', handleError);
+        video.removeEventListener('canplay', handleCanPlay);
+        video.removeEventListener('canplaythrough', handleCanPlayThrough);
       };
     }, [src, onTimeUpdate, onLoadedMetadata, onPlay, onPause]);
+
+    // Reset video state when src changes
+    useEffect(() => {
+      setIsVideoReady(false);
+      setVideoError(null);
+      setIsLoading(true);
+      console.log('Video src changed to:', src);
+    }, [src]);
 
     useEffect(() => {
       const video = videoRef.current;
@@ -156,16 +199,20 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       if (!currentZoom) return {};
       
       const { x, y, scale } = currentZoom;
+      console.log('Applying zoom effect:', { x, y, scale, transition: currentZoom.transition });
       
       // Calculate the offset to keep the zoom point centered
       const offsetX = (50 - x) * (scale - 1);
       const offsetY = (50 - y) * (scale - 1);
       
-      return {
+      const style = {
         transform: `scale(${scale}) translate(${offsetX}%, ${offsetY}%)`,
         transformOrigin: 'center center',
         transition: currentZoom.transition === 'smooth' ? 'transform 0.3s ease-out' : 'none'
       };
+      
+      console.log('Applied transform style:', style);
+      return style;
     };
 
     const getZoomIndicatorPosition = () => {
@@ -186,6 +233,40 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
           ref={videoWrapperRef}
           className="absolute inset-0 flex items-center justify-center overflow-hidden"
         >
+          {/* Loading Indicator */}
+          {!isVideoReady && !videoError && (
+            <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
+              <div className="text-white text-center">
+                <div className="animate-spin w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+                <p>Loading video...</p>
+                <p className="text-sm text-gray-400 mt-2">{src}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Error Display */}
+          {videoError && (
+            <div className="absolute inset-0 flex items-center justify-center bg-red-900/50">
+              <div className="text-white text-center p-6 bg-red-800 rounded-lg">
+                <h3 className="text-lg font-semibold mb-2">Video Loading Error</h3>
+                <p className="text-red-200 mb-4">{videoError}</p>
+                <p className="text-sm text-gray-300">File: {src}</p>
+                <button 
+                  onClick={() => {
+                    setVideoError(null);
+                    setIsLoading(true);
+                    if (videoRef.current) {
+                      videoRef.current.load();
+                    }
+                  }}
+                  className="mt-4 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded"
+                >
+                  Retry
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Video Container that handles the zoom transform */}
           <div 
             className="relative"
@@ -198,6 +279,10 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
               onClick={handleVideoClick}
               preload="metadata"
               playsInline
+              crossOrigin="anonymous"
+              muted={isMuted}
+              controls={false}
+              onLoadStart={() => setIsLoading(true)}
             />
             
             {/* Zoom Position Indicator - positioned relative to video */}
@@ -207,6 +292,38 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                 style={getZoomIndicatorPosition()}
               />
             )}
+
+            {/* Text Overlays */}
+            {textOverlays.map((textOverlay) => {
+              const isActive = currentTime >= textOverlay.startTime && currentTime <= textOverlay.endTime;
+              if (!isActive) return null;
+
+              return (
+                <div
+                  key={textOverlay.id}
+                  className="absolute pointer-events-none z-20"
+                  style={{
+                    left: `${textOverlay.x}%`,
+                    top: `${textOverlay.y}%`,
+                    transform: 'translate(-50%, -50%)',
+                    fontFamily: textOverlay.fontFamily,
+                    fontSize: `${textOverlay.fontSize}px`,
+                    color: textOverlay.color,
+                    backgroundColor: textOverlay.backgroundColor,
+                    padding: `${textOverlay.padding}px`,
+                    borderRadius: `${textOverlay.borderRadius}px`,
+                    whiteSpace: 'pre-wrap',
+                    textAlign: 'center',
+                    textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
+                    boxShadow: textOverlay.backgroundColor ? '2px 2px 8px rgba(0,0,0,0.5)' : 'none',
+                    maxWidth: '80%',
+                    wordWrap: 'break-word'
+                  }}
+                >
+                  {textOverlay.text}
+                </div>
+              );
+            })}
           </div>
         </div>
 

@@ -19,6 +19,7 @@ export const AutoZoomRecorder: React.FC<AutoZoomRecorderProps> = ({ onVideoImpor
   const [status, setStatus] = useState<'idle' | 'recording' | 'processing' | 'complete' | 'error'>('idle');
   const [message, setMessage] = useState('');
   const [recordingStatus, setRecordingStatus] = useState<RecordingStatus | null>(null);
+  const [hasAutoImported, setHasAutoImported] = useState(false);
 
   const API_BASE_URL = 'http://localhost:5000';
 
@@ -39,6 +40,23 @@ export const AutoZoomRecorder: React.FC<AutoZoomRecorderProps> = ({ onVideoImpor
       if (interval) clearInterval(interval);
     };
   }, [isRecording]);
+
+  // Automatically import recording when ready
+  useEffect(() => {
+    if (
+      status === 'complete' &&
+      recordingStatus?.files.video &&
+      recordingStatus?.files.clicks &&
+      !hasAutoImported
+    ) {
+      importRecording();
+      setHasAutoImported(true);
+    }
+    // Reset auto-import flag if user starts a new recording
+    if (status === 'recording' || status === 'processing') {
+      setHasAutoImported(false);
+    }
+  }, [status, recordingStatus, hasAutoImported]);
 
   const checkApiConnection = async () => {
     try {

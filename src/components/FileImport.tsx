@@ -1,24 +1,53 @@
 import React, { useRef } from 'react';
-import { Upload, FileVideo, Sparkles, FileText, Video } from 'lucide-react';
+import { Upload, FileVideo, Sparkles, FileText, Video, Zap } from 'lucide-react';
 
 interface FileImportProps {
   onFileSelect: (file: File) => void;
   onSakImport: () => void;
   onAutoZoomRecord: () => void;
+  onClicksImport?: (clicksData: any) => void;
 }
 
 export const FileImport: React.FC<FileImportProps> = ({ 
   onFileSelect, 
   onSakImport, 
-  onAutoZoomRecord 
+  onAutoZoomRecord,
+  onClicksImport 
 }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const clicksInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileSelect = (file: File) => {
-    if (file.type.startsWith('video/')) {
+  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      console.log('File selected:', {
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        lastModified: file.lastModified
+      });
       onFileSelect(file);
+    }
+  };
+
+  const handleClicksFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file && file.type === 'application/json') {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const clicksData = JSON.parse(e.target?.result as string);
+          if (onClicksImport) {
+            onClicksImport(clicksData);
+          }
+        } catch (error) {
+          console.error('Error parsing clicks file:', error);
+          alert('Invalid JSON file. Please select a valid clicks.json file.');
+        }
+      };
+      reader.readAsText(file);
     } else {
-      alert('Please select a video file');
+      alert('Please select a valid JSON file.');
     }
   };
 
@@ -26,7 +55,30 @@ export const FileImport: React.FC<FileImportProps> = ({
     e.preventDefault();
     const files = Array.from(e.dataTransfer.files);
     if (files.length > 0) {
-      handleFileSelect(files[0]);
+      const file = files[0];
+      console.log('File dropped:', {
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        lastModified: file.lastModified
+      });
+      if (file.type.startsWith('video/')) {
+        onFileSelect(file);
+      } else if (file.type === 'application/json') {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            const clicksData = JSON.parse(e.target?.result as string);
+            if (onClicksImport) {
+              onClicksImport(clicksData);
+            }
+          } catch (error) {
+            console.error('Error parsing clicks file:', error);
+            alert('Invalid JSON file. Please select a valid clicks.json file.');
+          }
+        };
+        reader.readAsText(file);
+      }
     }
   };
 
@@ -65,8 +117,33 @@ export const FileImport: React.FC<FileImportProps> = ({
               <span>Choose File</span>
             </button>
             <p className="text-sm text-gray-500 mt-3">
-              Supports MP4, MOV, AVI, and other common video formats
+              Supports MP4, WebM, MOV, AVI, and other common video formats
             </p>
+          </div>
+
+          {/* Clicks Data Import */}
+          <div className="bg-gray-800 rounded-xl p-6 border border-gray-700">
+            <div className="flex items-center space-x-3 mb-4">
+              <FileText className="w-6 h-6 text-blue-400" />
+              <h3 className="text-lg font-semibold text-white">Import Clicks Data</h3>
+            </div>
+            <p className="text-gray-400 text-sm mb-4">
+              Upload clicks.json to add auto-zoom effects
+            </p>
+            <button
+              onClick={() => clicksInputRef.current?.click()}
+              className="w-full flex items-center justify-center space-x-2 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors"
+            >
+              <Upload className="w-5 h-5" />
+              <span>Choose Clicks.json</span>
+            </button>
+            <input
+              ref={clicksInputRef}
+              type="file"
+              accept=".json"
+              onChange={handleClicksFileSelect}
+              className="hidden"
+            />
           </div>
 
           {/* AutoZoom Recorder */}
@@ -103,11 +180,8 @@ export const FileImport: React.FC<FileImportProps> = ({
         <input
           ref={fileInputRef}
           type="file"
-          accept="video/*"
-          onChange={(e) => {
-            const file = e.target.files?.[0];
-            if (file) handleFileSelect(file);
-          }}
+          accept="video/*,.webm,.mp4,.mov,.avi,.mkv"
+          onChange={handleFileSelect}
           className="hidden"
         />
 

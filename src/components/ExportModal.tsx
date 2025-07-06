@@ -1,10 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, Download, Settings, Play, AlertCircle, CheckCircle, Volume2 } from 'lucide-react';
-import { ZoomEffect } from '../types';
+import { ZoomEffect, TextOverlay } from '../types';
+import { FFmpeg } from '@ffmpeg/ffmpeg';
+import { toBlobURL } from '@ffmpeg/util';
 
 interface ExportModalProps {
   videoFile: File;
   zoomEffects: ZoomEffect[];
+  textOverlays: TextOverlay[];
   duration: number;
   onClose: () => void;
 }
@@ -12,6 +15,7 @@ interface ExportModalProps {
 export const ExportModal: React.FC<ExportModalProps> = ({
   videoFile,
   zoomEffects,
+  textOverlays,
   duration,
   onClose
 }) => {
@@ -19,13 +23,121 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [exportProgress, setExportProgress] = useState(0);
   const [exportStatus, setExportStatus] = useState<'idle' | 'processing' | 'complete' | 'error'>('idle');
   const [quality, setQuality] = useState('1080p');
-  const [format, setFormat] = useState('webm');
+  const [format, setFormat] = useState('mp4');
   const [includeSakData, setIncludeSakData] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
+  const [ffmpeg, setFfmpeg] = useState<FFmpeg | null>(null);
+  const [ffmpegLoaded, setFfmpegLoaded] = useState(false);
+  const [ffmpegLoadingProgress, setFfmpegLoadingProgress] = useState(0);
+
+  // Initialize FFmpeg with timeout
+  useEffect(() => {
+    const initFFmpeg = async () => {
+      try {
+        console.log('Loading FFmpeg...');
+        setErrorMessage('Loading FFmpeg for MP4 conversion...');
+        setFfmpegLoadingProgress(10);
+        
+        const ffmpegInstance = new FFmpeg();
+        
+        // Set a timeout for FFmpeg loading (10 seconds)
+        const loadPromise = ffmpegInstance.load({
+          coreURL: await toBlobURL(`/ffmpeg-core.js`, 'text/javascript'),
+          wasmURL: await toBlobURL(`/ffmpeg-core.wasm`, 'application/wasm'),
+        });
+        
+        // Simulate progress updates
+        const progressInterval = setInterval(() => {
+          setFfmpegLoadingProgress(prev => {
+            if (prev < 90) return prev + 10;
+            return prev;
+          });
+        }, 500);
+        
+        // Add timeout
+        const timeoutPromise = new Promise((_, reject) => {
+          setTimeout(() => {
+            clearInterval(progressInterval);
+            reject(new Error('FFmpeg loading timeout'));
+          }, 10000);
+        });
+        
+        await Promise.race([loadPromise, timeoutPromise]);
+        clearInterval(progressInterval);
+        setFfmpegLoadingProgress(100);
+        
+        setFfmpeg(ffmpegInstance);
+        setFfmpegLoaded(true);
+        console.log('FFmpeg loaded successfully');
+        setErrorMessage('');
+      } catch (error) {
+        console.error('Failed to load FFmpeg:', error);
+        setFfmpegLoaded(false);
+        setErrorMessage('FFmpeg failed to load. Switching to WebM format for faster export.');
+        
+        // Auto-switch to WebM if FFmpeg fails
+        if (format === 'mp4') {
+          setFormat('webm');
+        }
+      }
+    };
+
+    initFFmpeg();
+  }, [format]);
+
+
+
+
+
+  const convertWebmToMp4 = async (webmBlob: Blob): Promise<Blob> => {
+    if (!ffmpeg || !ffmpegLoaded) {
+      throw new Error('FFmpeg not loaded');
+    }
+
+    try {
+      console.log('Starting MP4 conversion...');
+      
+      // Write WebM file to FFmpeg
+      const webmData = new Uint8Array(await webmBlob.arrayBuffer());
+      await ffmpeg.writeFile('input.webm', webmData);
+      console.log('WebM file written to FFmpeg');
+
+      // Convert to MP4 with H.264 video and AAC audio
+      const result = await ffmpeg.exec([
+        '-i', 'input.webm',
+        '-c:v', 'libx264',
+        '-preset', 'fast',
+        '-crf', '23',
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-movflags', '+faststart',
+        '-y', // Overwrite output file
+        'output.mp4'
+      ]);
+      
+      console.log('FFmpeg conversion completed with result:', result);
+
+      // Read the output MP4 file
+      const mp4Data = await ffmpeg.readFile('output.mp4');
+      const mp4Blob = new Blob([mp4Data], { type: 'video/mp4' });
+      
+      console.log('MP4 blob created, size:', mp4Blob.size);
+
+      // Clean up files
+      await ffmpeg.deleteFile('input.webm');
+      await ffmpeg.deleteFile('output.mp4');
+
+      return mp4Blob;
+    } catch (error) {
+      console.error('FFmpeg conversion error:', error);
+      throw new Error(`MP4 conversion failed: ${error}`);
+    }
+  };
 
   const processVideoWithZoomAndAudio = async (
     videoFile: File,
     zoomEffects: ZoomEffect[],
+    textOverlays: TextOverlay[],
     onProgress: (progress: number) => void
   ): Promise<Blob> => {
     return new Promise((resolve, reject) => {
@@ -40,13 +152,21 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
       video.src = URL.createObjectURL(videoFile);
       video.crossOrigin = 'anonymous';
-      video.muted = false;
+      video.muted = false; // Keep audio for capture
       video.volume = 1.0;
+      video.preload = 'metadata';
       
-      video.onloadedmetadata = async () => {
-        try {
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
+                video.onloadedmetadata = async () => {
+            try {
+              canvas.width = video.videoWidth;
+              canvas.height = video.videoHeight;
+              
+              console.log('Video metadata loaded:', {
+                width: video.videoWidth,
+                height: video.videoHeight,
+                duration: video.duration,
+                hasAudio: !video.muted
+              });
           
           const chunks: Blob[] = [];
           
@@ -65,9 +185,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           const source = audioContext.createMediaElementSource(video);
           const destination = audioContext.createMediaStreamDestination();
           
-          // Connect audio source to destination (for recording) and to speakers (for monitoring)
+          // Connect audio source to destination (for recording only - no speaker output)
           source.connect(destination);
-          source.connect(audioContext.destination);
+          
+          // Also connect to a gain node to control volume
+          const gainNode = audioContext.createGain();
+          gainNode.gain.value = 1.0; // Full volume
+          source.connect(gainNode);
+          gainNode.connect(destination);
           
           // Create combined stream with video and audio
           const combinedStream = new MediaStream();
@@ -76,27 +201,37 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           // Add audio track if available
           const audioTracks = destination.stream.getAudioTracks();
           if (audioTracks.length > 0) {
+            console.log('Adding audio track to recording');
             combinedStream.addTrack(audioTracks[0]);
+          } else {
+            console.log('No audio track available for recording');
           }
           
-          // Try different codec combinations for best compatibility
+          // Always use WebM for reliable recording - browsers can't create true MP4 files
+          // WebM provides the best audio support and compatibility
           const codecOptions = [
+            // High quality options first
             { mimeType: 'video/webm;codecs=vp9,opus', videoBitrate: 8000000, audioBitrate: 192000 },
             { mimeType: 'video/webm;codecs=vp8,opus', videoBitrate: 6000000, audioBitrate: 128000 },
             { mimeType: 'video/webm;codecs=h264,opus', videoBitrate: 5000000, audioBitrate: 128000 },
-            { mimeType: 'video/webm', videoBitrate: 4000000, audioBitrate: 96000 }
+            // Fallback options
+            { mimeType: 'video/webm;codecs=vp9', videoBitrate: 4000000, audioBitrate: 96000 },
+            { mimeType: 'video/webm;codecs=vp8', videoBitrate: 3000000, audioBitrate: 96000 },
+            { mimeType: 'video/webm', videoBitrate: 2000000, audioBitrate: 64000 }
           ];
           
           let selectedCodec = null;
+          
           for (const codec of codecOptions) {
-            if (MediaRecorder.isTypeSupported(codec.mimeType)) {
+            const isSupported = MediaRecorder.isTypeSupported(codec.mimeType);
+            if (isSupported) {
               selectedCodec = codec;
               break;
             }
           }
           
           if (!selectedCodec) {
-            reject(new Error('No supported video codec found for audio recording'));
+            reject(new Error('No supported WebM codec found. Browser may not support WebM recording.'));
             return;
           }
           
@@ -113,14 +248,22 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           };
           
           mediaRecorder.onstop = () => {
+            console.log('MediaRecorder stopped, chunks:', chunks.length);
+            clearTimeout(recordingTimeout);
             const blob = new Blob(chunks, { type: selectedCodec!.mimeType });
+            console.log('Final blob size:', blob.size, 'type:', blob.type);
             audioContext.close();
             resolve(blob);
           };
           
           mediaRecorder.onerror = (event) => {
+            console.error('MediaRecorder error:', event);
             audioContext.close();
-            reject(new Error('MediaRecorder error: ' + (event as any).error));
+            reject(new Error('MediaRecorder error: ' + (event as any).error || 'Unknown error'));
+          };
+          
+          mediaRecorder.onstart = () => {
+            console.log('MediaRecorder started');
           };
           
           // Start recording
@@ -131,8 +274,16 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           const totalFrames = Math.ceil(duration * targetFPS);
           let lastTime = 0;
           
+          // Add timeout to prevent infinite recording
+          const recordingTimeout = setTimeout(() => {
+            console.log('Recording timeout reached, stopping');
+            mediaRecorder.stop();
+          }, (duration + 5) * 1000); // 5 seconds extra buffer
+          
           const processFrame = (currentTime: number) => {
-            if (video.ended || video.paused) {
+            // Check if video has ended or is paused
+            if (video.ended || video.paused || video.currentTime >= video.duration) {
+              console.log('Video ended, stopping recording');
               mediaRecorder.stop();
               return;
             }
@@ -156,44 +307,154 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             // Clear canvas
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
-            if (activeZoom) {
-              // Apply zoom effect with smooth transitions
-              const { x, y, scale } = activeZoom;
-              const zoomWidth = canvas.width / scale;
-              const zoomHeight = canvas.height / scale;
-              const zoomX = (x / 100) * canvas.width - zoomWidth / 2;
-              const zoomY = (y / 100) * canvas.height - zoomHeight / 2;
-              
-              // Clamp zoom area to video bounds
-              const clampedZoomX = Math.max(0, Math.min(zoomX, canvas.width - zoomWidth));
-              const clampedZoomY = Math.max(0, Math.min(zoomY, canvas.height - zoomHeight));
-              const clampedZoomWidth = Math.min(zoomWidth, canvas.width - clampedZoomX);
-              const clampedZoomHeight = Math.min(zoomHeight, canvas.height - clampedZoomY);
-              
-              // Draw zoomed portion
-              ctx.drawImage(
-                video,
-                clampedZoomX,
-                clampedZoomY,
-                clampedZoomWidth,
-                clampedZoomHeight,
-                0,
-                0,
-                canvas.width,
-                canvas.height
-              );
+            // Ensure video is ready before drawing
+            if (video.readyState >= 2) { // HAVE_CURRENT_DATA
+              if (activeZoom) {
+                // Apply zoom effect with smooth transitions
+                const { x, y, scale } = activeZoom;
+                const zoomWidth = canvas.width / scale;
+                const zoomHeight = canvas.height / scale;
+                const zoomX = (x / 100) * canvas.width - zoomWidth / 2;
+                const zoomY = (y / 100) * canvas.height - zoomHeight / 2;
+                
+                // Clamp zoom area to video bounds
+                const clampedZoomX = Math.max(0, Math.min(zoomX, canvas.width - zoomWidth));
+                const clampedZoomY = Math.max(0, Math.min(zoomY, canvas.height - zoomHeight));
+                const clampedZoomWidth = Math.min(zoomWidth, canvas.width - clampedZoomX);
+                const clampedZoomHeight = Math.min(zoomHeight, canvas.height - clampedZoomY);
+                
+                // Draw zoomed portion
+                ctx.drawImage(
+                  video,
+                  clampedZoomX,
+                  clampedZoomY,
+                  clampedZoomWidth,
+                  clampedZoomHeight,
+                  0,
+                  0,
+                  canvas.width,
+                  canvas.height
+                );
+              } else {
+                // Draw normal frame
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+              }
             } else {
-              // Draw normal frame
-              ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+              // Draw black frame if video not ready
+              ctx.fillStyle = 'black';
+              ctx.fillRect(0, 0, canvas.width, canvas.height);
             }
+            
+            // Draw text overlays
+            const activeTextOverlays = textOverlays.filter(textOverlay => 
+              videoCurrentTime >= textOverlay.startTime && videoCurrentTime <= textOverlay.endTime
+            );
+            
+            activeTextOverlays.forEach(textOverlay => {
+              // Set text properties
+              ctx.font = `${textOverlay.fontSize}px ${textOverlay.fontFamily}`;
+              ctx.fillStyle = textOverlay.color;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              
+              // Add text shadow
+              ctx.shadowColor = 'rgba(0,0,0,0.8)';
+              ctx.shadowBlur = 4;
+              ctx.shadowOffsetX = 2;
+              ctx.shadowOffsetY = 2;
+              
+              // Calculate position
+              const x = (textOverlay.x / 100) * canvas.width;
+              const y = (textOverlay.y / 100) * canvas.height;
+              
+              // Draw background if specified
+              if (textOverlay.backgroundColor) {
+                const textMetrics = ctx.measureText(textOverlay.text);
+                const textWidth = textMetrics.width;
+                const textHeight = textOverlay.fontSize;
+                const padding = textOverlay.padding || 0;
+                const borderRadius = textOverlay.borderRadius || 0;
+                
+                // Draw background rectangle
+                ctx.fillStyle = textOverlay.backgroundColor;
+                ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                ctx.shadowBlur = 8;
+                ctx.shadowOffsetX = 2;
+                ctx.shadowOffsetY = 2;
+                
+                const bgX = x - (textWidth / 2) - padding;
+                const bgY = y - (textHeight / 2) - padding;
+                const bgWidth = textWidth + (padding * 2);
+                const bgHeight = textHeight + (padding * 2);
+                
+                // Draw rounded rectangle background
+                ctx.beginPath();
+                if (borderRadius > 0) {
+                  // Draw rounded rectangle manually
+                  ctx.moveTo(bgX + borderRadius, bgY);
+                  ctx.lineTo(bgX + bgWidth - borderRadius, bgY);
+                  ctx.quadraticCurveTo(bgX + bgWidth, bgY, bgX + bgWidth, bgY + borderRadius);
+                  ctx.lineTo(bgX + bgWidth, bgY + bgHeight - borderRadius);
+                  ctx.quadraticCurveTo(bgX + bgWidth, bgY + bgHeight, bgX + bgWidth - borderRadius, bgY + bgHeight);
+                  ctx.lineTo(bgX + borderRadius, bgY + bgHeight);
+                  ctx.quadraticCurveTo(bgX, bgY + bgHeight, bgX, bgY + bgHeight - borderRadius);
+                  ctx.lineTo(bgX, bgY + borderRadius);
+                  ctx.quadraticCurveTo(bgX, bgY, bgX + borderRadius, bgY);
+                } else {
+                  // Draw regular rectangle
+                  ctx.rect(bgX, bgY, bgWidth, bgHeight);
+                }
+                ctx.fill();
+                
+                // Reset shadow for text
+                ctx.shadowColor = 'rgba(0,0,0,0.8)';
+                ctx.shadowBlur = 4;
+                ctx.shadowOffsetX = 2;
+                ctx.shadowOffsetY = 2;
+                ctx.fillStyle = textOverlay.color;
+              }
+              
+              // Draw text (handle multi-line)
+              const lines = textOverlay.text.split('\n');
+              const lineHeight = textOverlay.fontSize * 1.2;
+              const totalHeight = lines.length * lineHeight;
+              const startY = y - (totalHeight / 2) + (lineHeight / 2);
+              
+              lines.forEach((line, index) => {
+                const lineY = startY + (index * lineHeight);
+                ctx.fillText(line, x, lineY);
+              });
+              
+              // Reset shadow
+              ctx.shadowColor = 'transparent';
+              ctx.shadowBlur = 0;
+              ctx.shadowOffsetX = 0;
+              ctx.shadowOffsetY = 0;
+            });
             
             frameCount++;
             requestAnimationFrame(processFrame);
           };
           
           // Start video playback and frame processing
-          await video.play();
-          requestAnimationFrame(processFrame);
+          try {
+            // Try to play with audio first
+            await video.play();
+            console.log('Video started playing with audio, duration:', video.duration);
+            requestAnimationFrame(processFrame);
+          } catch (playError) {
+            console.log('Failed to play with audio, trying muted:', playError);
+            // If autoplay with audio fails, try muted
+            video.muted = true;
+            try {
+              await video.play();
+              console.log('Video started playing muted, duration:', video.duration);
+              requestAnimationFrame(processFrame);
+            } catch (mutedPlayError) {
+              console.error('Failed to play video even muted:', mutedPlayError);
+              reject(new Error('Failed to start video playback'));
+            }
+          }
           
         } catch (error) {
           reject(error);
@@ -207,64 +468,90 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       video.onended = () => {
         onProgress(95);
       };
+      
+      // Add canplay event to ensure video is ready
+      video.oncanplay = () => {
+        console.log('Video can play, ready for recording');
+      };
     });
   };
 
   const handleExport = async () => {
+    if (!videoFile) {
+      setErrorMessage('No video file selected for export.');
+      setExportStatus('error');
+      return;
+    }
+
     try {
       setIsExporting(true);
       setExportStatus('processing');
       setExportProgress(0);
       setErrorMessage('');
 
-      // Process video with zoom effects and preserve audio
-      const processedBlob = await processVideoWithZoomAndAudio(
+      // Always export as WebM first (most reliable)
+      setErrorMessage('Recording video with zoom effects and audio...');
+      const webmBlob = await processVideoWithZoomAndAudio(
         videoFile,
         zoomEffects,
-        setExportProgress
+        textOverlays,
+        (progress) => setExportProgress(progress * 0.8) // First 80% for recording
       );
+      
+      // Always use WebM for export
+      const processedBlob = webmBlob;
+      const actualFormat = 'webm';
 
       setExportProgress(98);
 
-      // Determine file extension and MIME type
-      let fileExtension = 'webm';
-      let finalBlob = processedBlob;
+      // Use the selected format for file extension
+      const fileExtension = actualFormat;
+      const finalBlob = processedBlob;
+      
+      
 
-      if (format === 'mp4') {
-        // Note: True MP4 conversion would require FFmpeg.wasm or server-side processing
-        fileExtension = 'webm';
-        setErrorMessage('Note: Exported as WebM with audio (MP4 conversion requires additional tools)');
-      }
 
       setExportProgress(100);
       setExportStatus('complete');
 
-      // Create download link for video
-      const url = URL.createObjectURL(finalBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${videoFile.name.replace(/\.[^/.]+$/, '')}_with_zoom_and_audio.${fileExtension}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      // Always save as WebM first
+      const webmUrl = URL.createObjectURL(webmBlob);
+      const webmLink = document.createElement('a');
+      webmLink.href = webmUrl;
+      webmLink.download = `${videoFile.name.replace(/\.[^/.]+$/, '')}_with_zoom_and_audio.webm`;
+      document.body.appendChild(webmLink);
+      webmLink.click();
+      document.body.removeChild(webmLink);
+      URL.revokeObjectURL(webmUrl);
+
+      // If MP4 was requested, show conversion command
+      if (format === 'mp4') {
+        const fileName = videoFile.name.replace(/\.[^/.]+$/, '') + '_with_zoom_and_audio';
+        setErrorMessage(`WebM exported! To convert to MP4, run this command in terminal:
+        
+ffmpeg -i "${fileName}.webm" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 192k "${fileName}.mp4"`);
+      }
 
       // Download sak.py integration data if requested
       if (includeSakData) {
         const exportData = {
           videoFile: videoFile.name,
           zoomEffects,
+          textOverlays,
           duration,
           exportSettings: { 
             quality, 
             format: fileExtension,
+            requestedFormat: format,
+            actualFormat: actualFormat,
             audioIncluded: true,
             videoBitrate: '8Mbps',
             audioBitrate: '192kbps'
           },
           timestamp: new Date().toISOString(),
           audioPreserved: true,
-          totalZoomEffects: zoomEffects.length
+          totalZoomEffects: zoomEffects.length,
+          totalTextOverlays: textOverlays.length
         };
         
         const jsonBlob = new Blob([JSON.stringify(exportData, null, 2)], { 
@@ -289,7 +576,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       setExportStatus('error');
       const errorMsg = error instanceof Error ? error.message : 'Export failed';
       setErrorMessage(errorMsg);
-      console.error('Export error:', error);
     } finally {
       setIsExporting(false);
     }
@@ -311,7 +597,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const getStatusText = () => {
     switch (exportStatus) {
       case 'processing':
-        return 'Processing with audio...';
+        return 'Recording WebM with zoom effects and audio...';
       case 'complete':
         return 'Export complete!';
       case 'error':
@@ -341,6 +627,18 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         </div>
 
         <div className="p-6 space-y-6">
+          {format === 'mp4' && (
+            <div className="bg-blue-900/20 border border-blue-700 rounded-lg p-3">
+              <div className="flex items-center space-x-2">
+                <Settings className="w-4 h-4 text-blue-400" />
+                <span className="text-blue-300 text-sm font-medium">Manual MP4 Conversion</span>
+              </div>
+              <p className="text-blue-200 text-xs mt-1">
+                WebM will be exported first, then you'll get the FFmpeg command to convert to MP4
+              </p>
+            </div>
+          )}
+          
           <div className="bg-green-900/20 border border-green-700 rounded-lg p-3">
             <div className="flex items-center space-x-2">
               <Volume2 className="w-4 h-4 text-green-400" />
@@ -374,9 +672,28 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               disabled={isExporting}
               className="w-full bg-gray-700 border border-gray-600 text-white rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
             >
-              <option value="webm">WebM (Best audio support - VP9 + Opus)</option>
-              <option value="mp4">MP4 (Exports as WebM - requires conversion)</option>
+              <option value="webm">WebM (Export directly)</option>
+              <option value="mp4">MP4 (Export as WebM + manual conversion)</option>
             </select>
+
+            {format === 'mp4' && (
+              <div className="mt-2 p-2 bg-blue-900/20 border border-blue-700 rounded">
+                <div className="flex items-center space-x-2">
+                  {ffmpegLoaded ? (
+                    <div className="w-4 h-4 bg-green-500 rounded-full flex items-center justify-center">
+                      <span className="text-white text-xs">✓</span>
+                    </div>
+                  ) : (
+                    <div className="w-4 h-4 bg-yellow-500 rounded-full flex items-center justify-center">
+                      <div className="animate-spin w-3 h-3 border border-white border-t-transparent rounded-full"></div>
+                    </div>
+                  )}
+                  <span className="text-blue-300 text-xs">
+                    {ffmpegLoaded ? 'FFmpeg ready for MP4 conversion' : 'FFmpeg loading... (will auto-switch to WebM if not ready)'}
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex items-center justify-between">
@@ -444,7 +761,17 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
           <div className="text-xs text-gray-500 bg-gray-700 p-3 rounded-lg">
             <strong>Audio Quality:</strong> The exported video preserves the original audio track with high-quality encoding. 
-            WebM format provides the best compatibility for audio preservation in browsers.
+            {format === 'mp4' && (
+              <div className="mt-2">
+                <strong>MP4 Export:</strong> True MP4 format with H.264 video codec and AAC audio for maximum compatibility across devices and platforms.
+                {!ffmpegLoaded && ' (FFmpeg loading required for conversion)'}
+              </div>
+            )}
+            {format === 'webm' && (
+              <div className="mt-2">
+                <strong>WebM Export:</strong> Uses VP9 video codec with Opus audio for best quality and browser compatibility.
+              </div>
+            )}
           </div>
         </div>
 

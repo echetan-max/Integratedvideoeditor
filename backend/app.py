@@ -17,12 +17,12 @@ recording_thread = None
 is_recording = False
 
 def run_sak_recording():
-    """Run the sak.py script in a separate process"""
+    """Run the sak_enhanced.py script in a separate process"""
     global recording_process, is_recording
     try:
-        # Start the sak.py script
+        # Start the sak_enhanced.py script (exports raw video + click data)
         recording_process = subprocess.Popen([
-            sys.executable, 'sak.py'
+            sys.executable, 'sak_enhanced.py'
         ], cwd=os.path.dirname(os.path.abspath(__file__)))
         
         is_recording = True
@@ -30,7 +30,7 @@ def run_sak_recording():
         is_recording = False
         
     except Exception as e:
-        print(f"Error running sak.py: {e}")
+        print(f"Error running sak_enhanced.py: {e}")
         is_recording = False
 
 @app.route('/start-recording', methods=['POST'])
@@ -198,5 +198,6 @@ def health_check():
 
 if __name__ == '__main__':
     print("Starting AutoZoom API server...")
-    print("Make sure sak.py is in the same directory as this script")
+    print("Make sure sak_enhanced.py is in the same directory as this script")
+    print("Enhanced version exports raw video + click data for timeline editing")
     app.run(host='0.0.0.0', port=5000, debug=True)

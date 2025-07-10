@@ -95,45 +95,87 @@ def record_screen(region):
                 break
 
 def record_audio():
+    import noisereduce as nr
+    import numpy as np
+    import sounddevice as sd
+    import scipy.io.wavfile as wav
+    from scipy.signal import iirnotch, butter, filtfilt
+
     buf = []
-    try:
-        apis = sd.query_hostapis()
-        idx = next(i for i,a in enumerate(apis) if 'wasapi' in a['name'].lower())
-        dev = next(i for i,d in enumerate(sd.query_devices())
-                   if d['hostapi']==idx and 'loopback' in d['name'].lower())
-    except Exception:
-        dev = None
+    def cb(indata, frames, t, status):
+        buf.append(indata.copy())
 
-    if dev is None:
-        status_var.set("Loopback not found, mic only.")
-        device=None; ch=1
-    else:
-        device=dev
-        ch=sd.query_devices(dev)['max_input_channels']
+    # 1) Calibrate ambient noise (0.5 s)
+    with sd.InputStream(samplerate=AUDIO_FS, device=None, channels=1, callback=cb):
+        status_var.set("Calibrating noise (0.5 s)…")
+        sd.sleep(int(0.5 * 1000))
+    noise_profile = np.concatenate(buf, axis=0).flatten()
+    buf.clear()
 
-    def cb(ind,frames_count,ti,st):
-        audio_q.put(ind.copy())
-
-    with sd.InputStream(samplerate=AUDIO_FS, device=device, channels=ch, callback=cb):
+    # 2) Record your voice until stopped
+    with sd.InputStream(samplerate=AUDIO_FS, device=None, channels=1, callback=cb):
+        status_var.set("Recording voice…")
         while not stop_event.is_set():
             sd.sleep(100)
 
-    while not audio_q.empty():
-        buf.append(audio_q.get())
+    if not buf:
+        status_var.set("No audio captured.")
+        return
+    arr = np.concatenate(buf, axis=0).flatten()
 
-    if buf:
-        arr = np.concatenate(buf, axis=0)
+    # 3) Notch at 50 Hz
+    b_notch, a_notch = iirnotch(50.0, Q=30.0, fs=AUDIO_FS)
+    arr = filtfilt(b_notch, a_notch, arr)
 
-        # Apply noise reduction using noisereduce
-        arr_denoised = nr.reduce_noise(y=arr.flatten(), sr=AUDIO_FS)
-        arr_denoised = arr_denoised.reshape(arr.shape)  # Match original shape
+    # 4) Band-pass 100 Hz–8 kHz
+    nyq = 0.5 * AUDIO_FS
+    b_bp, a_bp = butter(4, [100/nyq, 8000/nyq], btype='band')
+    arr = filtfilt(b_bp, a_bp, arr)
 
-        # Normalize after denoising
-        mv = np.abs(arr_denoised).max()
-        if mv > 0:
-            arr_denoised = arr_denoised / mv * 0.95
+    # 5) Noise reduction with your true profile
+    try:
+        arr = nr.reduce_noise(
+            y=arr,
+            y_noise=noise_profile,
+            sr=AUDIO_FS,
+            stationary=True,
+            prop_decrease=0.6
+        )
+    except Exception as e:
+        print("Noise reduction failed:", e)
 
-        wav.write("temp_audio.wav", AUDIO_FS, arr_denoised.astype(np.float32))
+    # 6) Smooth noise gate (10 ms attack, 100 ms release)
+    frame_len = int(0.02 * AUDIO_FS)  # 20 ms
+    hop_len   = int(0.01 * AUDIO_FS)  # 10 ms
+    rms_vals = []
+    for i in range(0, len(arr), hop_len):
+        frame = arr[i:i+frame_len]
+        rms_vals.append(np.sqrt(np.mean(frame**2)) if frame.size else 0)
+    rms = np.array(rms_vals)
+    gate_thresh = np.mean(np.sqrt(np.mean(noise_profile[:frame_len]**2))) * 1.5
+    mask = np.repeat(rms > gate_thresh, hop_len)[:len(arr)]
+
+    # envelope smoothing
+    aA = np.exp(-1/(0.01* AUDIO_FS))  # attack
+    aR = np.exp(-1/(0.1 * AUDIO_FS))  # release
+    env = np.zeros_like(mask, dtype=float)
+    for i in range(1, len(mask)):
+        env[i] = aA * env[i-1] + (1 - aA) if mask[i] else aR * env[i-1]
+    arr = arr * env
+
+    # 7) Normalize to 85% full scale
+    peak = np.max(np.abs(arr))
+    if peak > 0:
+        arr = arr / peak * 0.85
+
+    # 8) Write 16-bit PCM
+    pcm = (arr * 32767).astype(np.int16)
+    wav.write("temp_audio.wav", AUDIO_FS, pcm)
+
+    status_var.set("Audio cleanly saved.")
+
+
+
         
 def on_move(x, y):
     cursor_pos[0], cursor_pos[1] = x, y
@@ -201,7 +243,7 @@ def save_raw_video_and_clicks():
         vw.release()
 
         # Add audio if available
-        final_name = "preview.mp4"
+        final_name = "out.mp4"
         if os.path.exists("temp_audio.wav"):
             subprocess.run([
                 "ffmpeg", "-y",

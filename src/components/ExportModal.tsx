@@ -23,7 +23,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [exportProgress, setExportProgress] = useState(0);
   const [exportStatus, setExportStatus] = useState<'idle' | 'processing' | 'complete' | 'error'>('idle');
   const [quality, setQuality] = useState('1080p');
-  const [format, setFormat] = useState('mp4');
+  // Always use mp4 format
+  const format = 'mp4';
   const [includeSakData, setIncludeSakData] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
   const [ffmpeg, setFfmpeg] = useState<FFmpeg | null>(null);
@@ -76,9 +77,9 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         setErrorMessage('FFmpeg failed to load. Switching to WebM format for faster export.');
         
         // Auto-switch to WebM if FFmpeg fails
-        if (format === 'mp4') {
-          setFormat('webm');
-        }
+        // if (format === 'mp4') { // This line is removed as format is now always 'mp4'
+        //   setFormat('webm');
+        // }
       }
     };
 
@@ -497,40 +498,31 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         textOverlays,
         (progress) => setExportProgress(progress * 0.8) // First 80% for recording
       );
-      
-      // Always use WebM for export
-      const processedBlob = webmBlob;
-      const actualFormat = 'webm';
 
+      // Convert WebM to MP4 using FFmpeg
+      if (!ffmpeg || !ffmpegLoaded) {
+        setExportStatus('error');
+        setErrorMessage('FFmpeg is not loaded. MP4 export is required. Please wait for FFmpeg to load.');
+        return;
+      }
+      setErrorMessage('Converting to MP4...');
+      setExportProgress(90);
+      const mp4Blob = await convertWebmToMp4(webmBlob);
       setExportProgress(98);
 
-      // Use the selected format for file extension
-      const fileExtension = actualFormat;
-      const finalBlob = processedBlob;
-      
-      
-
+      // Download the MP4 file
+      const fileName = videoFile.name.replace(/\.[^/.]+$/, '') + '_with_zoom_and_audio.mp4';
+      const mp4Url = URL.createObjectURL(mp4Blob);
+      const mp4Link = document.createElement('a');
+      mp4Link.href = mp4Url;
+      mp4Link.download = fileName;
+      document.body.appendChild(mp4Link);
+      mp4Link.click();
+      document.body.removeChild(mp4Link);
+      URL.revokeObjectURL(mp4Url);
 
       setExportProgress(100);
       setExportStatus('complete');
-
-      // Always save as WebM first
-      const webmUrl = URL.createObjectURL(webmBlob);
-      const webmLink = document.createElement('a');
-      webmLink.href = webmUrl;
-      webmLink.download = `${videoFile.name.replace(/\.[^/.]+$/, '')}_with_zoom_and_audio.webm`;
-      document.body.appendChild(webmLink);
-      webmLink.click();
-      document.body.removeChild(webmLink);
-      URL.revokeObjectURL(webmUrl);
-
-      // If MP4 was requested, show conversion command
-      if (format === 'mp4') {
-        const fileName = videoFile.name.replace(/\.[^/.]+$/, '') + '_with_zoom_and_audio';
-        setErrorMessage(`WebM exported! To convert to MP4, run this command in terminal:
-        
-ffmpeg -i "${fileName}.webm" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 192k "${fileName}.mp4"`);
-      }
 
       // Download sak.py integration data if requested
       if (includeSakData) {
@@ -541,9 +533,9 @@ ffmpeg -i "${fileName}.webm" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 192
           duration,
           exportSettings: { 
             quality, 
-            format: fileExtension,
-            requestedFormat: format,
-            actualFormat: actualFormat,
+            format: 'mp4',
+            requestedFormat: 'mp4',
+            actualFormat: 'mp4',
             audioIncluded: true,
             videoBitrate: '8Mbps',
             audioBitrate: '192kbps'
@@ -553,7 +545,6 @@ ffmpeg -i "${fileName}.webm" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 192
           totalZoomEffects: zoomEffects.length,
           totalTextOverlays: textOverlays.length
         };
-        
         const jsonBlob = new Blob([JSON.stringify(exportData, null, 2)], { 
           type: 'application/json' 
         });
@@ -627,17 +618,7 @@ ffmpeg -i "${fileName}.webm" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 192
         </div>
 
         <div className="p-6 space-y-6">
-          {format === 'mp4' && (
-            <div className="bg-blue-900/20 border border-blue-700 rounded-lg p-3">
-              <div className="flex items-center space-x-2">
-                <Settings className="w-4 h-4 text-blue-400" />
-                <span className="text-blue-300 text-sm font-medium">Manual MP4 Conversion</span>
-              </div>
-              <p className="text-blue-200 text-xs mt-1">
-                WebM will be exported first, then you'll get the FFmpeg command to convert to MP4
-              </p>
-            </div>
-          )}
+          {/* Format selection removed: always export as MP4 */}
           
           <div className="bg-green-900/20 border border-green-700 rounded-lg p-3">
             <div className="flex items-center space-x-2">
@@ -664,37 +645,7 @@ ffmpeg -i "${fileName}.webm" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 192
             </select>
           </div>
 
-          <div>
-            <label className="block text-sm text-gray-300 mb-2">Format</label>
-            <select
-              value={format}
-              onChange={(e) => setFormat(e.target.value)}
-              disabled={isExporting}
-              className="w-full bg-gray-700 border border-gray-600 text-white rounded-lg px-3 py-2 focus:ring-2 focus:ring-purple-500 disabled:opacity-50"
-            >
-              <option value="webm">WebM (Export directly)</option>
-              <option value="mp4">MP4 (Export as WebM + manual conversion)</option>
-            </select>
-
-            {format === 'mp4' && (
-              <div className="mt-2 p-2 bg-blue-900/20 border border-blue-700 rounded">
-                <div className="flex items-center space-x-2">
-                  {ffmpegLoaded ? (
-                    <div className="w-4 h-4 bg-green-500 rounded-full flex items-center justify-center">
-                      <span className="text-white text-xs">✓</span>
-                    </div>
-                  ) : (
-                    <div className="w-4 h-4 bg-yellow-500 rounded-full flex items-center justify-center">
-                      <div className="animate-spin w-3 h-3 border border-white border-t-transparent rounded-full"></div>
-                    </div>
-                  )}
-                  <span className="text-blue-300 text-xs">
-                    {ffmpegLoaded ? 'FFmpeg ready for MP4 conversion' : 'FFmpeg loading... (will auto-switch to WebM if not ready)'}
-                  </span>
-                </div>
-              </div>
-            )}
-          </div>
+          {/* Format selection removed: always export as MP4 */}
 
           <div className="flex items-center justify-between">
             <span className="text-sm text-gray-300">Include sak.py integration data</span>
@@ -761,17 +712,10 @@ ffmpeg -i "${fileName}.webm" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 192
 
           <div className="text-xs text-gray-500 bg-gray-700 p-3 rounded-lg">
             <strong>Audio Quality:</strong> The exported video preserves the original audio track with high-quality encoding. 
-            {format === 'mp4' && (
-              <div className="mt-2">
-                <strong>MP4 Export:</strong> True MP4 format with H.264 video codec and AAC audio for maximum compatibility across devices and platforms.
-                {!ffmpegLoaded && ' (FFmpeg loading required for conversion)'}
-              </div>
-            )}
-            {format === 'webm' && (
-              <div className="mt-2">
-                <strong>WebM Export:</strong> Uses VP9 video codec with Opus audio for best quality and browser compatibility.
-              </div>
-            )}
+            <div className="mt-2">
+              <strong>MP4 Export:</strong> True MP4 format with H.264 video codec and AAC audio for maximum compatibility across devices and platforms.
+              {!ffmpegLoaded && ' (FFmpeg loading required for conversion)'}
+            </div>
           </div>
         </div>
 

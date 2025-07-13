@@ -32,6 +32,12 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     const [isVideoReady, setIsVideoReady] = useState(false);
     const [videoError, setVideoError] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
+    
+    // Add state to track previous zoom for smooth transitions
+    const [previousZoom, setPreviousZoom] = useState<ZoomEffect | null>(null);
+    const [isTransitioning, setIsTransitioning] = useState(false);
+    const [transitionStartTime, setTransitionStartTime] = useState(0);
+    const [transitionProgress, setTransitionProgress] = useState(0);
 
     useImperativeHandle(ref, () => ({
       play: () => {
@@ -158,6 +164,56 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       video.volume = isMuted ? 0 : volume;
     }, [volume, isMuted]);
 
+    // Track zoom changes and handle smooth transitions
+    useEffect(() => {
+      if (currentZoom && !previousZoom) {
+        // Starting a new zoom - store it as previous
+        console.log('🟢 Starting new zoom:', currentZoom.id);
+        setPreviousZoom(currentZoom);
+        setIsTransitioning(false);
+      } else if (!currentZoom && previousZoom) {
+        // Zoom ended - start transition out
+        console.log('🔴 Zoom ended, starting transition out:', previousZoom.id);
+        setIsTransitioning(true);
+        setTransitionStartTime(Date.now());
+        
+        // After transition duration, clear the previous zoom
+        const transitionDuration = 500; // 0.5s to match CSS transition
+        const timer = setTimeout(() => {
+          console.log('✅ Transition completed, clearing previous zoom');
+          setPreviousZoom(null);
+          setIsTransitioning(false);
+        }, transitionDuration);
+        
+        return () => clearTimeout(timer);
+      } else if (currentZoom && previousZoom && currentZoom.id !== previousZoom.id) {
+        // Different zoom effect - update previous
+        console.log('🔄 Switching to different zoom:', currentZoom.id);
+        setPreviousZoom(currentZoom);
+        setIsTransitioning(false);
+      }
+    }, [currentZoom, previousZoom]);
+
+    // Update transition progress for smooth animation
+    useEffect(() => {
+      if (isTransitioning) {
+        const animate = () => {
+          if (isTransitioning) {
+            const elapsed = Date.now() - transitionStartTime;
+            const progress = Math.min(elapsed / 500, 1); // 500ms transition
+            setTransitionProgress(progress);
+            
+            if (progress < 1) {
+              requestAnimationFrame(animate);
+            }
+          }
+        };
+        requestAnimationFrame(animate);
+      } else {
+        setTransitionProgress(0);
+      }
+    }, [isTransitioning, transitionStartTime]);
+
     const handleVideoClick = (e: React.MouseEvent<HTMLVideoElement>) => {
       const rect = e.currentTarget.getBoundingClientRect();
       const x = ((e.clientX - rect.left) / rect.width) * 100;
@@ -196,19 +252,45 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     }, []);
 
     const getTransformStyle = () => {
-      if (!currentZoom) return {};
+      // Determine which zoom to use for rendering
+      const activeZoom = currentZoom || (isTransitioning ? previousZoom : null);
       
-      const { x, y, scale } = currentZoom;
-      console.log('Applying zoom effect:', { x, y, scale, transition: currentZoom.transition });
+      if (!activeZoom) return {};
+      
+      const { x, y, scale } = activeZoom;
+      console.log('Applying zoom effect:', { 
+        x, y, scale, 
+        transition: activeZoom.transition, 
+        isTransitioning, 
+        transitionProgress: isTransitioning ? transitionProgress : 0,
+        finalScale: isTransitioning && !currentZoom ? scale + (1.0 - scale) * transitionProgress : scale
+      });
       
       // Calculate the offset to keep the zoom point centered
       const offsetX = (50 - x) * (scale - 1);
       const offsetY = (50 - y) * (scale - 1);
       
+      // If transitioning out, gradually reduce the scale
+      let finalScale = scale;
+      let finalOffsetX = offsetX;
+      let finalOffsetY = offsetY;
+      
+      if (isTransitioning && !currentZoom) {
+        // Use the tracked transition progress
+        const progress = transitionProgress;
+        
+        // Interpolate scale from current to 1.0
+        finalScale = scale + (1.0 - scale) * progress;
+        
+        // Interpolate offset to keep the zoom point centered during transition
+        finalOffsetX = (50 - x) * (finalScale - 1);
+        finalOffsetY = (50 - y) * (finalScale - 1);
+      }
+      
       const style = {
-        transform: `scale(${scale}) translate(${offsetX}%, ${offsetY}%)`,
+        transform: `scale(${finalScale}) translate(${finalOffsetX}%, ${finalOffsetY}%)`,
         transformOrigin: 'center center',
-        transition: currentZoom.transition === 'smooth' ? 'transform 0.3s ease-out' : 'none'
+        transition: activeZoom.transition === 'smooth' && !isTransitioning ? 'transform 0.5s cubic-bezier(0.4, 0.0, 0.2, 1)' : 'none'
       };
       
       console.log('Applied transform style:', style);
@@ -216,66 +298,69 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     };
 
     const getZoomIndicatorPosition = () => {
-      if (!currentZoom || !videoRef.current || !videoWrapperRef.current) {
+      const activeZoom = currentZoom || (isTransitioning ? previousZoom : null);
+      
+      if (!activeZoom || !videoRef.current || !videoWrapperRef.current) {
         return { left: '50%', top: '50%' };
       }
 
       return {
-        left: `${currentZoom.x}%`,
-        top: `${currentZoom.y}%`
+        left: `${activeZoom.x}%`,
+        top: `${activeZoom.y}%`
       };
     };
 
     return (
-      <div ref={containerRef} className="flex-1 bg-black relative group">
-        {/* Video Wrapper with Overflow Hidden to Contain Zoom */}
+      <div className="flex-1 flex items-center justify-center bg-black relative overflow-hidden group h-full">
+        {/* Loading Indicator */}
+        {!isVideoReady && !videoError && (
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-900 z-10">
+            <div className="text-white text-center">
+              <div className="animate-spin w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full mx-auto mb-4"></div>
+              <p>Loading video...</p>
+              <p className="text-sm text-gray-400 mt-2">{src}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Error Display */}
+        {videoError && (
+          <div className="absolute inset-0 flex items-center justify-center bg-red-900/50 z-10">
+            <div className="text-white text-center p-6 bg-red-800 rounded-lg">
+              <h3 className="text-lg font-semibold mb-2">Video Loading Error</h3>
+              <p className="text-red-200 mb-4">{videoError}</p>
+              <p className="text-sm text-gray-300">File: {src}</p>
+              <button 
+                onClick={() => {
+                  setVideoError(null);
+                  setIsLoading(true);
+                  if (videoRef.current) {
+                    videoRef.current.load();
+                  }
+                }}
+                className="mt-4 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded"
+              >
+                Retry
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Video Container */}
         <div 
-          ref={videoWrapperRef}
-          className="absolute inset-0 flex items-center justify-center overflow-hidden"
+          className="relative w-full h-full flex items-center justify-center"
+          ref={containerRef}
         >
-          {/* Loading Indicator */}
-          {!isVideoReady && !videoError && (
-            <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
-              <div className="text-white text-center">
-                <div className="animate-spin w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full mx-auto mb-4"></div>
-                <p>Loading video...</p>
-                <p className="text-sm text-gray-400 mt-2">{src}</p>
-              </div>
-            </div>
-          )}
-
-          {/* Error Display */}
-          {videoError && (
-            <div className="absolute inset-0 flex items-center justify-center bg-red-900/50">
-              <div className="text-white text-center p-6 bg-red-800 rounded-lg">
-                <h3 className="text-lg font-semibold mb-2">Video Loading Error</h3>
-                <p className="text-red-200 mb-4">{videoError}</p>
-                <p className="text-sm text-gray-300">File: {src}</p>
-                <button 
-                  onClick={() => {
-                    setVideoError(null);
-                    setIsLoading(true);
-                    if (videoRef.current) {
-                      videoRef.current.load();
-                    }
-                  }}
-                  className="mt-4 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded"
-                >
-                  Retry
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Video Container that handles the zoom transform */}
+          {/* Video Wrapper with Zoom */}
           <div 
-            className="relative"
+            className="relative w-full h-full max-w-full max-h-full"
             style={getTransformStyle()}
+            ref={videoWrapperRef}
           >
             <video
               ref={videoRef}
               src={src}
-              className="max-w-full max-h-full cursor-pointer block"
+              className="w-full h-full max-w-full max-h-full cursor-pointer block object-contain"
               onClick={handleVideoClick}
               preload="metadata"
               playsInline
@@ -286,7 +371,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
             />
             
             {/* Zoom Position Indicator - positioned relative to video */}
-            {currentZoom && isVideoReady && (
+            {(currentZoom || (isTransitioning && previousZoom)) && isVideoReady && (
               <div
                 className="absolute w-3 h-3 bg-purple-500 border-2 border-white rounded-full transform -translate-x-1/2 -translate-y-1/2 pointer-events-none z-10"
                 style={getZoomIndicatorPosition()}
@@ -327,8 +412,8 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
           </div>
         </div>
 
-        {/* Video Controls Overlay */}
-        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4 opacity-0 group-hover:opacity-100 transition-opacity">
+        {/* Video Controls Overlay - Always visible */}
+        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-4">
               <button
@@ -367,24 +452,21 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
           </div>
         </div>
 
-        {/* Loading indicator */}
-        {!isVideoReady && (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="text-white text-lg">Loading video...</div>
-          </div>
-        )}
-
         {/* Click instruction */}
-        {!currentZoom && isVideoReady && (
+        {!currentZoom && !isTransitioning && isVideoReady && (
           <div className="absolute top-4 left-4 bg-black/60 text-white px-3 py-2 rounded-lg text-sm opacity-60">
             Click on video to add zoom effect
           </div>
         )}
 
         {/* Zoom info overlay */}
-        {currentZoom && (
+        {(currentZoom || (isTransitioning && previousZoom)) && (
           <div className="absolute top-4 right-4 bg-black/60 text-white px-3 py-2 rounded-lg text-sm">
-            Zoom: {currentZoom.scale.toFixed(1)}x at ({currentZoom.x.toFixed(0)}%, {currentZoom.y.toFixed(0)}%)
+            {(() => {
+              const activeZoom = currentZoom || previousZoom;
+              if (!activeZoom) return '';
+              return `Zoom: ${activeZoom.scale.toFixed(1)}x at (${activeZoom.x.toFixed(0)}%, ${activeZoom.y.toFixed(0)}%)`;
+            })()}
           </div>
         )}
       </div>

@@ -286,15 +286,7 @@ export const VideoEditor: React.FC = () => {
       
       <div className="flex-1 flex overflow-hidden">
         <div className="w-80 bg-gray-800 border-r border-gray-700 flex flex-col">
-          <div className="flex border-b border-gray-700">
-            <button className="flex-1 py-3 px-4 text-white bg-purple-600 font-medium">
-              Zoom Effects
-            </button>
-            <button className="flex-1 py-3 px-4 text-gray-400 hover:text-white hover:bg-gray-700 font-medium">
-              Text Overlays
-            </button>
-          </div>
-          
+          {/* Removed tab buttons for Zoom Effects and Text Overlays */}
           <div className="flex-1 overflow-y-auto">
             <ZoomControls
               zoomEnabled={zoomEnabled}
@@ -342,59 +334,6 @@ export const VideoEditor: React.FC = () => {
               }
             }}
           />
-          
-          {/* Zoom List Section */}
-          <div className="bg-gray-800 border-t border-gray-700 p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-white font-medium">All Zoom Effects ({zoomEffects.length})</h3>
-              {zoomEffects.length > 0 && (
-                <button
-                  onClick={deleteAllZoomEffects}
-                  className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm rounded transition-colors"
-                >
-                  🗑️ Clear All
-                </button>
-              )}
-            </div>
-            
-            <div className="max-h-32 overflow-y-auto space-y-2">
-              {zoomEffects.length === 0 ? (
-                <p className="text-gray-400 text-sm">No zoom effects added yet</p>
-              ) : (
-                zoomEffects.map((zoom, index) => {
-                  const isAutoZoom = zoom.type === 'autozoom';
-                  return (
-                    <div
-                      key={zoom.id}
-                      className={`flex items-center justify-between p-2 rounded ${
-                        selectedZoom?.id === zoom.id ? (isAutoZoom ? 'bg-blue-600' : 'bg-purple-600') : 'bg-gray-700'
-                      } hover:bg-gray-600 transition-colors cursor-pointer`}
-                      onClick={() => setSelectedZoom(zoom)}
-                    >
-                      <div className="flex-1">
-                        <div className="text-white text-sm">
-                          Zoom {index + 1}: {zoom.startTime.toFixed(1)}s - {zoom.endTime.toFixed(1)}s
-                        </div>
-                        <div className="text-gray-400 text-xs">
-                          Position: ({zoom.x.toFixed(0)}%, {zoom.y.toFixed(0)}%) | Scale: {zoom.scale.toFixed(1)}x
-                        </div>
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteZoomEffect(zoom.id);
-                        }}
-                        className="ml-2 px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded transition-colors"
-                      >
-                        🗑️
-                      </button>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-          
           <Timeline
             duration={duration}
             currentTime={currentTime}

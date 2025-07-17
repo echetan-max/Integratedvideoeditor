@@ -40,3 +40,80 @@ export interface ExportSettings {
   format: 'mp4' | 'mov' | 'avi';
   includeSakData: boolean;
 }
+
+// --- Helper: Linear interpolation ---
+export function lerp(a: number, b: number, t: number) {
+  return a + (b - a) * t;
+}
+
+// --- Robust zoom interpolation (matches preview and export) ---
+export function getInterpolatedZoom(time: number, zooms: ZoomEffect[]): ZoomEffect {
+  if (!zooms.length) {
+    return {
+      id: 'default',
+      startTime: 0,
+      endTime: Number.MAX_SAFE_INTEGER,
+      x: 50,
+      y: 50,
+      scale: 1.0,
+      transition: 'smooth',
+    };
+  }
+  const sorted = [...zooms].sort((a, b) => a.startTime - b.startTime);
+
+  // Before first zoom: default zoom-out
+  if (time < sorted[0].startTime) {
+    return {
+      id: 'default',
+      startTime: 0,
+      endTime: sorted[0].startTime,
+      x: 50,
+      y: 50,
+      scale: 1.0,
+      transition: 'smooth',
+    };
+  }
+
+  // Within a zoom
+  for (let i = 0; i < sorted.length; i++) {
+    const zA = sorted[i];
+    if (time >= zA.startTime && time <= zA.endTime) return zA;
+    const zB = sorted[i + 1];
+    // Between zooms: default zoom-out
+    if (zB && time > zA.endTime && time < zB.startTime) {
+      return {
+        id: 'default',
+        startTime: zA.endTime,
+        endTime: zB.startTime,
+        x: 50,
+        y: 50,
+        scale: 1.0,
+        transition: 'smooth',
+      };
+    }
+  }
+
+  // After last zoom: default zoom-out
+  if (time > sorted[sorted.length - 1].endTime) {
+    return {
+      id: 'default',
+      startTime: sorted[sorted.length - 1].endTime,
+      endTime: Number.MAX_SAFE_INTEGER,
+      x: 50,
+      y: 50,
+      scale: 1.0,
+      transition: 'smooth',
+    };
+  }
+
+  // Fallback: default zoom-out
+  return {
+    id: 'default',
+    startTime: 0,
+    endTime: Number.MAX_SAFE_INTEGER,
+    x: 50,
+    y: 50,
+    scale: 1.0,
+    transition: 'smooth',
+  };
+}

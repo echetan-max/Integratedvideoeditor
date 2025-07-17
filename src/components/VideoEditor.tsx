@@ -8,7 +8,7 @@ import { ExportModal } from './ExportModal';
 import { SakDataImport } from './SakDataImport';
 import { AutoZoomRecorder } from './AutoZoomRecorder';
 import { TextOverlayComponent } from './TextOverlay';
-import { ZoomEffect, TextOverlay } from '../types';
+import { ZoomEffect, TextOverlay, getInterpolatedZoom } from '../types';
 
 export const VideoEditor: React.FC = () => {
   const [videoFile, setVideoFile] = useState<File | null>(null);
@@ -24,6 +24,7 @@ export const VideoEditor: React.FC = () => {
   const [showAutoZoomRecorder, setShowAutoZoomRecorder] = useState(false);
   const [zoomEnabled, setZoomEnabled] = useState(true);
   const videoRef = useRef<VideoPlayerRef>(null);
+  const clicksFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (videoFile) {
@@ -55,7 +56,7 @@ export const VideoEditor: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyPress);
   }, [selectedZoom]);
 
-  const addZoomEffect = (startTime: number, endTime: number, x: number, y: number, scale: number) => {
+  const addZoomEffect = (startTime: number, endTime: number, x: number, y: number, scale: number, type: 'manual' | 'autozoom' = 'manual') => {
     const newZoom: ZoomEffect = {
       id: Date.now().toString(),
       startTime,
@@ -63,7 +64,8 @@ export const VideoEditor: React.FC = () => {
       x,
       y,
       scale,
-      transition: 'smooth'
+      transition: 'smooth',
+      type
     };
     setZoomEffects(prev => [...prev, newZoom]);
     setSelectedZoom(newZoom);
@@ -104,11 +106,7 @@ export const VideoEditor: React.FC = () => {
   };
 
   const getCurrentZoom = () => {
-    const activeZoom = zoomEffects.find(
-      zoom => currentTime >= zoom.startTime && currentTime <= zoom.endTime
-    );
-    console.log('Current time:', currentTime, 'Active zoom:', activeZoom);
-    return activeZoom || null;
+    return getInterpolatedZoom(currentTime, zoomEffects);
   };
 
   const handleTimeUpdate = (time: number) => {
@@ -233,6 +231,28 @@ export const VideoEditor: React.FC = () => {
     setCurrentTime(0);
     setIsPlaying(false);
     setShowAutoZoomRecorder(false);
+    setTextOverlays([]); // Clear text overlays as well
+  };
+
+  // This will be used for the header Import Data button
+  const handleHeaderClicksImport = () => {
+    clicksFileInputRef.current?.click();
+  };
+
+  const handleHeaderClicksFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const clicksData = JSON.parse(e.target?.result as string);
+          handleClicksImport(clicksData);
+        } catch (error) {
+          alert('Invalid JSON file. Please select a valid clicks.json file.');
+        }
+      };
+      reader.readAsText(file);
+    }
   };
 
   if (!videoFile) {
@@ -280,8 +300,15 @@ export const VideoEditor: React.FC = () => {
         videoFile={videoFile}
         onExport={() => setShowExportModal(true)}
         onNewProject={resetProject}
-        onSakImport={() => setShowSakImport(true)}
+        onSakImport={handleHeaderClicksImport} // Now triggers file input
         onAutoZoomRecord={() => setShowAutoZoomRecorder(true)}
+      />
+      <input
+        ref={clicksFileInputRef}
+        type="file"
+        accept=".json"
+        style={{ display: 'none' }}
+        onChange={handleHeaderClicksFileSelect}
       />
       
       <div className="flex-1 flex overflow-hidden">

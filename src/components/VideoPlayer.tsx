@@ -168,27 +168,33 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     useEffect(() => {
       if (currentZoom && !previousZoom) {
         // Starting a new zoom - store it as previous
-        console.log('🟢 Starting new zoom:', currentZoom.id);
         setPreviousZoom(currentZoom);
         setIsTransitioning(false);
       } else if (!currentZoom && previousZoom) {
-        // Zoom ended - start transition out
-        console.log('🔴 Zoom ended, starting transition out:', previousZoom.id);
+        // Zoom ended - start transition out to 1x (zoom out)
         setIsTransitioning(true);
         setTransitionStartTime(Date.now());
-        
         // After transition duration, clear the previous zoom
         const transitionDuration = 500; // 0.5s to match CSS transition
         const timer = setTimeout(() => {
-          console.log('✅ Transition completed, clearing previous zoom');
-          setPreviousZoom(null);
-          setIsTransitioning(false);
+          setPreviousZoom({
+            ...previousZoom,
+            scale: 1.0,
+            x: 50,
+            y: 50,
+            transition: 'smooth',
+            id: 'zoom-out-temp',
+            startTime: previousZoom.endTime,
+            endTime: previousZoom.endTime + 0.5 // 0.5s for smooth out
+          });
+          setTimeout(() => {
+            setPreviousZoom(null);
+            setIsTransitioning(false);
+          }, transitionDuration);
         }, transitionDuration);
-        
         return () => clearTimeout(timer);
       } else if (currentZoom && previousZoom && currentZoom.id !== previousZoom.id) {
         // Different zoom effect - update previous
-        console.log('🔄 Switching to different zoom:', currentZoom.id);
         setPreviousZoom(currentZoom);
         setIsTransitioning(false);
       }

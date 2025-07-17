@@ -1,0 +1,46 @@
+{
+  "clicks": [
+    {
+      "id": "autozoom-0",
+      "time": 1752685625.4964175,
+      "x": 619.0,
+      "y": 429.0,
+      "width": 1920,
+      "height": 1200,
+      "zoomLevel": 2.0,
+      "duration": 2.0,
+      "type": "autozoom"
+    },
+    {
+      "id": "autozoom-1",
+      "time": 1752685629.8890753,
+      "x": 523.0,
+      "y": 595.0,
+      "width": 1920,
+      "height": 1200,
+      "zoomLevel": 2.0,
+      "duration": 2.0,
+      "type": "autozoom"
+    },
+    {
+      "id": "autozoom-2",
+      "time": 1752685631.7005584,
+      "x": 464.0,
+      "y": 516.0,
+      "width": 1920,
+      "height": 1200,
+      "zoomLevel": 2.0,
+      "duration": 2.0,
+      "type": "autozoom"
+    }
+  ],
+  "width": 1920,
+  "height": 1200,
+  "duration": 10.068124532699585,
+  "fps": 30,
+  "zoomFactor": 2.0,
+  "zoomTime": 1.0,
+  "idleTime": 1.0,
+  "totalClicks": 3,
+  "exportedAt": 1752685634.7817457
+}

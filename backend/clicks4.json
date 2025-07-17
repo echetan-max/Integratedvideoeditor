@@ -1,0 +1,68 @@
+{
+  "clicks": [
+    {
+      "id": "autozoom-0",
+      "time": 1752689126.0607111,
+      "x": 629.0,
+      "y": 848.0,
+      "width": 1920,
+      "height": 1200,
+      "zoomLevel": 2.0,
+      "duration": 2.0,
+      "type": "autozoom"
+    },
+    {
+      "id": "autozoom-1",
+      "time": 1752689126.9041781,
+      "x": 686.0,
+      "y": 685.0,
+      "width": 1920,
+      "height": 1200,
+      "zoomLevel": 2.0,
+      "duration": 2.0,
+      "type": "autozoom"
+    },
+    {
+      "id": "autozoom-2",
+      "time": 1752689129.0800889,
+      "x": 1099.0,
+      "y": 1029.0,
+      "width": 1920,
+      "height": 1200,
+      "zoomLevel": 2.0,
+      "duration": 2.0,
+      "type": "autozoom"
+    },
+    {
+      "id": "autozoom-3",
+      "time": 1752689131.0763361,
+      "x": 1107.0,
+      "y": 1015.0,
+      "width": 1920,
+      "height": 1200,
+      "zoomLevel": 2.0,
+      "duration": 2.0,
+      "type": "autozoom"
+    },
+    {
+      "id": "autozoom-4",
+      "time": 1752689133.4644449,
+      "x": 600.0,
+      "y": 595.0,
+      "width": 1920,
+      "height": 1200,
+      "zoomLevel": 2.0,
+      "duration": 2.0,
+      "type": "autozoom"
+    }
+  ],
+  "width": 1920,
+  "height": 1200,
+  "duration": 8.93574833869934,
+  "fps": 30,
+  "zoomFactor": 2.0,
+  "zoomTime": 1.0,
+  "idleTime": 1.0,
+  "totalClicks": 5,
+  "exportedAt": 1752689136.5834563
+}

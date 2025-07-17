@@ -12,6 +12,7 @@ import customtkinter as ctk
 import pygetwindow as gw
 from pynput import mouse
 import win32gui, win32con
+from scipy.signal import butter, sosfiltfilt, iirnotch, filtfilt
 
 FPS = 30
 ZOOM_FACTOR = 2.0
@@ -129,8 +130,8 @@ def record_audio():
 
     # 4) Band-pass 100 Hz–8 kHz
     nyq = 0.5 * AUDIO_FS
-    b_bp, a_bp = butter(4, [100/nyq, 8000/nyq], btype='band')
-    arr = filtfilt(b_bp, a_bp, arr)
+    sos = butter(4, [100/nyq, 8000/nyq], btype='band', output='sos')
+    arr = sosfiltfilt(sos, arr)
 
     # 5) Noise reduction with your true profile
     try:
@@ -180,13 +181,20 @@ def record_audio():
 def on_move(x, y):
     cursor_pos[0], cursor_pos[1] = x, y
 
+# Fix: Only register click on mouse down, not on release, and prevent double logging
+last_click_time: list[float] = [0.0]
 def on_click(x, y, button, pressed):
     if pressed and not stop_event.is_set():
+        # Debounce: ignore if last click was very recent (e.g., <0.2s)
+        now = time.time()
+        if now - last_click_time[0] < 0.2:
+            return
+        last_click_time[0] = now
         window = get_selected_window()
         region = get_region(window)
         rel_x = x - region['left']
         rel_y = y - region['top']
-        clicks.append((time.time(), rel_x, rel_y))
+        clicks.append((now, rel_x, rel_y))
         def update_log():
             click_log.configure(state="normal")
             click_log.insert("end", f"{rel_x:.0f}, {rel_y:.0f}\n")
@@ -235,27 +243,40 @@ def save_raw_video_and_clicks():
             real_duration = len(frames) / FPS
         actual_fps = len(frames) / real_duration if real_duration > 0 else FPS
 
-        vw = cv2.VideoWriter(tmp, cv2.VideoWriter_fourcc(*"mp4v"), actual_fps, (w, h))
+        # Compatibility for VideoWriter_fourcc
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # type: ignore
+        vw = cv2.VideoWriter(tmp, fourcc, actual_fps, (w, h))
         for _, frame, _, _ in frames:
             if frame.shape[1] != w or frame.shape[0] != h:
                 frame = cv2.resize(frame, (w, h))
             vw.write(frame)
         vw.release()
 
+        # Find next available N for outN.mp4 and clicksN.json
+        n = 1
+        while os.path.exists(f"out{n}.mp4") or os.path.exists(f"clicks{n}.json"):
+            n += 1
+        final_name = f"out{n}.mp4"
+        clicks_name = f"clicks{n}.json"
+
         # Add audio if available
-        final_name = "out.mp4"
         if os.path.exists("temp_audio.wav"):
-            subprocess.run([
-                "ffmpeg", "-y",
-                "-i", tmp,
-                "-i", "temp_audio.wav",
-                "-c:v", "libx264",
-                "-preset", "fast",
-                "-crf", "23",
-                "-c:a", "aac",
-                "-movflags", "+faststart",
-                "-shortest", final_name
-            ], check=True)
+            try:
+                subprocess.run([
+                    "ffmpeg", "-y",
+                    "-i", tmp,
+                    "-i", "temp_audio.wav",
+                    "-c:v", "libx264",
+                    "-preset", "fast",
+                    "-crf", "23",
+                    "-c:a", "aac",
+                    "-movflags", "+faststart",
+                    "-shortest", final_name
+                ], check=True)
+            except FileNotFoundError:
+                status_var.set("Error: ffmpeg not found. Please install ffmpeg and ensure it is in your PATH.")
+                print("Error: ffmpeg not found. Please install ffmpeg and ensure it is in your PATH.")
+                return
             os.remove("temp_audio.wav")
             os.remove(tmp)
         else:
@@ -294,11 +315,11 @@ def save_raw_video_and_clicks():
             "exportedAt": time.time()
         }
         
-        with open("clicks.json", "w") as f:
+        with open(clicks_name, "w") as f:
             json.dump(output_data, f, indent=2)
 
-        status_var.set(f"Saved: {final_name} + clicks.json ({len(clusters)} zooms)")
-        print(f"Exported {len(clusters)} auto-zoom effects for timeline editing")
+        status_var.set(f"Saved: {final_name} + {clicks_name} ({len(clusters)} zooms)")
+        print(f"Exported {len(clusters)} auto-zoom effects for timeline editing as {final_name} and {clicks_name}")
         
     except Exception as e:
         status_var.set(f"Error: {e}")

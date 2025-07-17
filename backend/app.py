@@ -33,6 +33,33 @@ def run_sak_recording():
         print(f"Error running sak_enhanced.py: {e}")
         is_recording = False
 
+# Find latest outN.mp4 and clicksN.json and rename to out.mp4/clicks.json
+def find_and_rename_latest_outputs(timeout=10):
+    """Wait for and rename the latest outN.mp4 and clicksN.json to out.mp4 and clicks.json."""
+    start_time = time.time()
+    outs, clicks = [], []
+    while time.time() - start_time < timeout:
+        outs = [f for f in os.listdir('.') if f.startswith('out') and f.endswith('.mp4')]
+        clicks = [f for f in os.listdir('.') if f.startswith('clicks') and f.endswith('.json')]
+        if outs and clicks:
+            break
+        time.sleep(1)  # Wait a bit and try again
+
+    if outs:
+        latest_out = max(outs, key=os.path.getctime)
+        if latest_out != 'out.mp4':
+            if os.path.exists('out.mp4'):
+                os.remove('out.mp4')
+            os.replace(latest_out, 'out.mp4')
+    if clicks:
+        latest_clicks = max(clicks, key=os.path.getctime)
+        if latest_clicks != 'clicks.json':
+            if os.path.exists('clicks.json'):
+                os.remove('clicks.json')
+            os.replace(latest_clicks, 'clicks.json')
+    # Return whether files were found
+    return bool(outs), bool(clicks)
+
 @app.route('/start-recording', methods=['POST'])
 def start_recording():
     """Start the AutoZoom recording"""
@@ -96,9 +123,9 @@ def stop_recording():
         
         is_recording = False
         
-        # Wait a moment for file processing to complete
-        time.sleep(2)
-        
+        # Wait for file processing and rename outputs
+        video_found, clicks_found = find_and_rename_latest_outputs(timeout=10)
+
         # Check if output files were created
         video_exists = os.path.exists('out.mp4')
         clicks_exists = os.path.exists('clicks.json')

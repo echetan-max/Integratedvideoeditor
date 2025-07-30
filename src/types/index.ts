@@ -46,7 +46,7 @@ export function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t;
 }
 
-// --- Robust zoom interpolation (matches preview and export) ---
+// --- Robust zoom interpolation (matches preview and export, for all zoom types) ---
 export function getInterpolatedZoom(time: number, zooms: ZoomEffect[]): ZoomEffect {
   if (!zooms.length) {
     return {
@@ -59,9 +59,11 @@ export function getInterpolatedZoom(time: number, zooms: ZoomEffect[]): ZoomEffe
       transition: 'smooth',
     };
   }
-  const sorted = [...zooms].sort((a, b) => a.startTime - b.startTime);
 
-  // Before first zoom: default zoom-out
+  // Sort zooms by start time
+  const sorted = [...zooms].sort((a, b) => a.startTime - b.startTime);
+  
+  // Before first zoom: no zoom (normal view)
   if (time < sorted[0].startTime) {
     return {
       id: 'default',
@@ -74,26 +76,7 @@ export function getInterpolatedZoom(time: number, zooms: ZoomEffect[]): ZoomEffe
     };
   }
 
-  // Within a zoom
-  for (let i = 0; i < sorted.length; i++) {
-    const zA = sorted[i];
-    if (time >= zA.startTime && time <= zA.endTime) return zA;
-    const zB = sorted[i + 1];
-    // Between zooms: default zoom-out
-    if (zB && time > zA.endTime && time < zB.startTime) {
-      return {
-        id: 'default',
-        startTime: zA.endTime,
-        endTime: zB.startTime,
-        x: 50,
-        y: 50,
-        scale: 1.0,
-        transition: 'smooth',
-      };
-    }
-  }
-
-  // After last zoom: default zoom-out
+  // After last zoom: no zoom (normal view)
   if (time > sorted[sorted.length - 1].endTime) {
     return {
       id: 'default',
@@ -106,7 +89,17 @@ export function getInterpolatedZoom(time: number, zooms: ZoomEffect[]): ZoomEffe
     };
   }
 
-  // Fallback: default zoom-out
+  // Find the active zoom
+  for (let i = 0; i < sorted.length; i++) {
+    const currentZoom = sorted[i];
+    
+    // If we're within this zoom's time range, return it exactly
+    if (time >= currentZoom.startTime && time <= currentZoom.endTime) {
+      return currentZoom;
+    }
+  }
+
+  // If we're not in any zoom range, return normal view (no zoom)
   return {
     id: 'default',
     startTime: 0,

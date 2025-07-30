@@ -85,11 +85,6 @@ export const VideoEditor: React.FC = () => {
     }
   };
 
-  const deleteAllZoomEffects = () => {
-    setZoomEffects([]);
-    setSelectedZoom(null);
-  };
-
   // Text overlay functions
   const addTextOverlay = (textOverlay: TextOverlay) => {
     setTextOverlays(prev => [...prev, textOverlay]);
@@ -103,10 +98,6 @@ export const VideoEditor: React.FC = () => {
 
   const deleteTextOverlay = (id: string) => {
     setTextOverlays(prev => prev.filter(text => text.id !== id));
-  };
-
-  const getCurrentZoom = () => {
-    return getInterpolatedZoom(currentTime, zoomEffects);
   };
 
   const handleTimeUpdate = (time: number) => {
@@ -128,13 +119,6 @@ export const VideoEditor: React.FC = () => {
     videoRef.current?.pause();
   };
 
-  const handleExportComplete = (exportedBlob: Blob, format: string) => {
-    const newFile = new File([exportedBlob], `exported_video.${format}`, { type: `video/${format}` });
-    setVideoFile(newFile);
-    setShowExportModal(false);
-    console.log('Exported video re-imported successfully.');
-  };
-
   const handleSakDataImport = (sakData: any) => {
     // Convert sak.py data to zoom effects
     if (sakData.clicks && Array.isArray(sakData.clicks)) {
@@ -153,17 +137,16 @@ export const VideoEditor: React.FC = () => {
   };
 
   const handleAutoZoomImport = (videoFile: File, clicksData: any) => {
-    // Set the video file
     setVideoFile(videoFile);
-    
-    // Convert clicks data to zoom effects using the specified format
     if (clicksData.clicks && Array.isArray(clicksData.clicks)) {
-      // Get the first click's timestamp as reference
+      // Find the earliest click time (video-relative, not epoch)
       const firstClickTime = Math.min(...clicksData.clicks.map((click: any) => click.time || 0));
-      
+      // If the first click time is very large (epoch), try to use the first click as 0
+      const isEpoch = firstClickTime > 1000000000;
+      const baseTime = isEpoch ? firstClickTime : 0;
       const newZoomEffects: ZoomEffect[] = clicksData.clicks.map((click: any, index: number) => {
-        // Normalize time relative to first click
-        const normalizedTime = (click.time || 0) - firstClickTime;
+        // Always normalize to video start
+        const normalizedTime = (click.time || 0) - baseTime;
         return {
           id: `autozoom-${index}-${Date.now()}`,
           startTime: normalizedTime,
@@ -176,49 +159,46 @@ export const VideoEditor: React.FC = () => {
           originalData: click
         };
       });
-      
-      setZoomEffects(newZoomEffects);
-      console.log('Auto zoom effects imported:', newZoomEffects);
-      
-      // Select the first zoom effect
+      setZoomEffects(prev => [...prev, ...newZoomEffects]);
       if (newZoomEffects.length > 0) {
         setSelectedZoom(newZoomEffects[0]);
       }
     }
-    
-    // Close the recorder modal
     setShowAutoZoomRecorder(false);
   };
 
   const handleClicksImport = (clicksData: any) => {
     if (clicksData.clicks && Array.isArray(clicksData.clicks)) {
-      // Get the first click's timestamp as reference
-      const firstClickTime = Math.min(...clicksData.clicks.map((click: any) => click.time || 0));
-      
+      // Detect if times are epoch (very large) or relative
+      const times = clicksData.clicks.map((c: any): number => c.time || 0);
+      const isEpoch = Math.min(...times) > 1e6;
+      const baseTime = isEpoch ? Math.min(...times) : 0;
+      // Use provided duration if available, else infer from last click
+      let duration = typeof clicksData.duration === 'number'
+        ? clicksData.duration
+        : Math.max(...times.map((t: number) => t - baseTime));
+      // Clamp duration to at least the last click's end
       const newZoomEffects: ZoomEffect[] = clicksData.clicks.map((click: any, index: number) => {
-        // Normalize time relative to first click
-        const normalizedTime = (click.time || 0) - firstClickTime;
-        
-        // Create zoom effect with normalized time
+        let normalizedTime = (click.time || 0) - baseTime;
+        normalizedTime = Math.max(0, Math.min(normalizedTime, duration));
+        const endTime = Math.max(0, Math.min(normalizedTime + (click.duration || 2.0), duration));
+        const width = click.width || clicksData.width;
+        const height = click.height || clicksData.height;
         const zoomEffect: ZoomEffect = {
           id: click.id || `imported-${index}-${Date.now()}`,
           startTime: normalizedTime,
-          endTime: normalizedTime + (click.duration || 2.0),
-          x: (click.x / clicksData.width) * 100,
-          y: (click.y / clicksData.height) * 100,
+          endTime: endTime,
+          x: (click.x / width) * 100,
+          y: (click.y / height) * 100,
           scale: click.zoomLevel || 2.0,
           transition: 'smooth',
           type: 'autozoom',
           originalData: click
         };
-        
-        console.log('Created zoom effect:', zoomEffect);
         return zoomEffect;
       });
-      
       setZoomEffects(prev => {
         const combined = [...prev, ...newZoomEffects];
-        console.log('Updated zoom effects:', combined);
         return combined;
       });
     }
@@ -254,6 +234,18 @@ export const VideoEditor: React.FC = () => {
       reader.readAsText(file);
     }
   };
+
+  // Utility to get export-ready zooms (sorted, filtered)
+  function getExportReadyZooms(zooms: ZoomEffect[], duration: number): ZoomEffect[] {
+    return [...zooms]
+      .filter(z => z.startTime < duration && z.endTime > 0)
+      .map(z => ({
+        ...z,
+        startTime: Math.max(0, Math.min(z.startTime, duration)),
+        endTime: Math.max(0, Math.min(z.endTime, duration)),
+      }))
+      .sort((a, b) => a.startTime - b.startTime);
+  }
 
   if (!videoFile) {
     return (
@@ -351,7 +343,14 @@ export const VideoEditor: React.FC = () => {
             onLoadedMetadata={(duration) => setDuration(duration)}
             onPlay={handlePlay}
             onPause={handlePause}
-            currentZoom={getCurrentZoom()}
+            currentZoom={(() => {
+              const exportReadyZooms = getExportReadyZooms(zoomEffects, duration);
+              const interpolatedZoom = getInterpolatedZoom(currentTime, exportReadyZooms);
+              
+              // Always return the interpolated zoom, even if it's the default zoom-out
+              // This ensures the preview shows the correct zoom state at all times
+              return interpolatedZoom;
+            })()}
             textOverlays={textOverlays}
             onVideoClick={(x, y) => {
               if (zoomEnabled && !selectedZoom) {
@@ -365,7 +364,7 @@ export const VideoEditor: React.FC = () => {
             duration={duration}
             currentTime={currentTime}
             onSeek={handleSeek}
-            zoomEffects={zoomEffects}
+            zoomEffects={getExportReadyZooms(zoomEffects, duration)}
             selectedZoom={selectedZoom}
             onSelectZoom={setSelectedZoom}
             onUpdateZoom={updateZoomEffect}
@@ -380,7 +379,7 @@ export const VideoEditor: React.FC = () => {
       {showExportModal && (
         <ExportModal
           videoFile={videoFile}
-          zoomEffects={zoomEffects}
+          zoomEffects={zoomEffects} // Pass all zoom effects, let ExportModal handle filtering
           textOverlays={textOverlays}
           duration={duration}
           onClose={() => setShowExportModal(false)}

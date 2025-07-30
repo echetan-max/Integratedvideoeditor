@@ -13,6 +13,7 @@ interface VideoPlayerProps {
   currentZoom: ZoomEffect | null;
   textOverlays: TextOverlay[];
   onVideoClick: (x: number, y: number) => void;
+  onSeeked?: () => void; // NEW
 }
 
 export interface VideoPlayerRef {
@@ -22,7 +23,7 @@ export interface VideoPlayerRef {
 }
 
 export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
-  ({ src, currentTime, isPlaying, onTimeUpdate, onLoadedMetadata, onPlay, onPause, currentZoom, textOverlays, onVideoClick }, ref) => {
+  ({ src, currentTime, isPlaying, onTimeUpdate, onLoadedMetadata, onPlay, onPause, currentZoom, textOverlays, onVideoClick, onSeeked }, ref) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const videoWrapperRef = useRef<HTMLDivElement>(null);
@@ -171,28 +172,9 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         setPreviousZoom(currentZoom);
         setIsTransitioning(false);
       } else if (!currentZoom && previousZoom) {
-        // Zoom ended - start transition out to 1x (zoom out)
+        // Zoom ended - start transition out
         setIsTransitioning(true);
         setTransitionStartTime(Date.now());
-        // After transition duration, clear the previous zoom
-        const transitionDuration = 500; // 0.5s to match CSS transition
-        const timer = setTimeout(() => {
-          setPreviousZoom({
-            ...previousZoom,
-            scale: 1.0,
-            x: 50,
-            y: 50,
-            transition: 'smooth',
-            id: 'zoom-out-temp',
-            startTime: previousZoom.endTime,
-            endTime: previousZoom.endTime + 0.5 // 0.5s for smooth out
-          });
-          setTimeout(() => {
-            setPreviousZoom(null);
-            setIsTransitioning(false);
-          }, transitionDuration);
-        }, transitionDuration);
-        return () => clearTimeout(timer);
       } else if (currentZoom && previousZoom && currentZoom.id !== previousZoom.id) {
         // Different zoom effect - update previous
         setPreviousZoom(currentZoom);
@@ -200,21 +182,35 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       }
     }, [currentZoom, previousZoom]);
 
-    // Update transition progress for smooth animation
+    // Simplified transition animation - removed complex logic
     useEffect(() => {
       if (isTransitioning) {
         const animate = () => {
           if (isTransitioning) {
             const elapsed = Date.now() - transitionStartTime;
-            const progress = Math.min(elapsed / 500, 1); // 500ms transition
+            const progress = Math.min(elapsed / 600, 1); // Shorter, smoother transition
             setTransitionProgress(progress);
             
             if (progress < 1) {
               requestAnimationFrame(animate);
+            } else {
+              setIsTransitioning(false);
+              setPreviousZoom(null);
             }
           }
         };
         requestAnimationFrame(animate);
+        
+        // Shorter timeout
+        const timeout = setTimeout(() => {
+          if (isTransitioning) {
+            setIsTransitioning(false);
+            setPreviousZoom(null);
+            setTransitionProgress(0);
+          }
+        }, 800);
+        
+        return () => clearTimeout(timeout);
       } else {
         setTransitionProgress(0);
       }
@@ -258,49 +254,45 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     }, []);
 
     const getTransformStyle = () => {
-      // Determine which zoom to use for rendering
-      const activeZoom = currentZoom || (isTransitioning ? previousZoom : null);
-      
-      if (!activeZoom) return {};
-      
-      const { x, y, scale } = activeZoom;
-      console.log('Applying zoom effect:', { 
-        x, y, scale, 
-        transition: activeZoom.transition, 
-        isTransitioning, 
-        transitionProgress: isTransitioning ? transitionProgress : 0,
-        finalScale: isTransitioning && !currentZoom ? scale + (1.0 - scale) * transitionProgress : scale
-      });
-      
-      // Calculate the offset to keep the zoom point centered
-      const offsetX = (50 - x) * (scale - 1);
-      const offsetY = (50 - y) * (scale - 1);
-      
-      // If transitioning out, gradually reduce the scale
-      let finalScale = scale;
-      let finalOffsetX = offsetX;
-      let finalOffsetY = offsetY;
-      
-      if (isTransitioning && !currentZoom) {
-        // Use the tracked transition progress
-        const progress = transitionProgress;
-        
-        // Interpolate scale from current to 1.0
-        finalScale = scale + (1.0 - scale) * progress;
-        
-        // Interpolate offset to keep the zoom point centered during transition
-        finalOffsetX = (50 - x) * (finalScale - 1);
-        finalOffsetY = (50 - y) * (finalScale - 1);
+      // If no zoom and not transitioning, return no transform
+      if (!currentZoom && !isTransitioning) {
+        return {};
       }
       
-      const style = {
-        transform: `scale(${finalScale}) translate(${finalOffsetX}%, ${finalOffsetY}%)`,
-        transformOrigin: 'center center',
-        transition: activeZoom.transition === 'smooth' && !isTransitioning ? 'transform 0.5s cubic-bezier(0.4, 0.0, 0.2, 1)' : 'none'
-      };
+      // If transitioning out, use previous zoom with interpolation
+      if (isTransitioning && !currentZoom && previousZoom) {
+        const progress = transitionProgress;
+        const finalScale = previousZoom.scale + (1.0 - previousZoom.scale) * progress;
+        const finalOffsetX = (50 - previousZoom.x) * (finalScale - 1);
+        const finalOffsetY = (50 - previousZoom.y) * (finalScale - 1);
+        
+        return {
+          transform: `scale(${finalScale.toFixed(3)}) translate(${finalOffsetX.toFixed(3)}%, ${finalOffsetY.toFixed(3)}%)`,
+          transformOrigin: 'center center',
+          transition: 'none'
+        };
+      }
       
-      console.log('Applied transform style:', style);
-      return style;
+      // If we have a current zoom, use it with smooth transitions
+      if (currentZoom) {
+        const { x, y, scale } = currentZoom;
+        const offsetX = (50 - x) * (scale - 1);
+        const offsetY = (50 - y) * (scale - 1);
+        
+        // Use optimized transition for better performance
+        const transitionDuration = currentZoom.transition === 'smooth' ? '0.6s' : '0.2s';
+        const easingCurve = 'cubic-bezier(0.4, 0.0, 0.2, 1)'; // Optimized for performance
+        
+        return {
+          transform: `scale(${scale.toFixed(3)}) translate(${offsetX.toFixed(3)}%, ${offsetY.toFixed(3)}%)`,
+          transformOrigin: 'center center',
+          transition: `transform ${transitionDuration} ${easingCurve}`,
+          willChange: 'transform' // Optimize for GPU acceleration
+        };
+      }
+      
+      // Fallback - no transform
+      return {};
     };
 
     const getZoomIndicatorPosition = () => {
@@ -360,7 +352,12 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
           {/* Video Wrapper with Zoom */}
           <div 
             className="relative w-full h-full max-w-full max-h-full"
-            style={getTransformStyle()}
+            style={{
+              ...getTransformStyle(),
+              backfaceVisibility: 'hidden', // Optimize for GPU
+              perspective: '1000px', // Enable 3D transforms
+              transformStyle: 'preserve-3d' // Better GPU acceleration
+            }}
             ref={videoWrapperRef}
           >
             <video
@@ -374,6 +371,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
               muted={isMuted}
               controls={false}
               onLoadStart={() => setIsLoading(true)}
+              onSeeked={onSeeked}
             />
             
             {/* Zoom Position Indicator - positioned relative to video */}
@@ -397,18 +395,20 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                     left: `${textOverlay.x}%`,
                     top: `${textOverlay.y}%`,
                     transform: 'translate(-50%, -50%)',
-                    fontFamily: textOverlay.fontFamily,
-                    fontSize: `${textOverlay.fontSize}px`,
-                    color: textOverlay.color,
-                    backgroundColor: textOverlay.backgroundColor,
-                    padding: `${textOverlay.padding}px`,
-                    borderRadius: `${textOverlay.borderRadius}px`,
+                    fontFamily: textOverlay.fontFamily || 'Arial, sans-serif',
+                    fontSize: `${textOverlay.fontSize || 24}px`,
+                    color: textOverlay.color || '#ffffff',
+                    backgroundColor: textOverlay.backgroundColor || 'transparent',
+                    padding: `${textOverlay.padding || 0}px`,
+                    borderRadius: `${textOverlay.borderRadius || 0}px`,
                     whiteSpace: 'pre-wrap',
                     textAlign: 'center',
                     textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
                     boxShadow: textOverlay.backgroundColor ? '2px 2px 8px rgba(0,0,0,0.5)' : 'none',
                     maxWidth: '80%',
-                    wordWrap: 'break-word'
+                    wordWrap: 'break-word',
+                    fontWeight: 'bold',
+                    lineHeight: '1.2'
                   }}
                 >
                   {textOverlay.text}

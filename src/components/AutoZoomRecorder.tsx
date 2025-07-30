@@ -21,7 +21,7 @@ export const AutoZoomRecorder: React.FC<AutoZoomRecorderProps> = ({ onVideoImpor
   const [recordingStatus, setRecordingStatus] = useState<RecordingStatus | null>(null);
   const [hasAutoImported, setHasAutoImported] = useState(false);
 
-  const API_BASE_URL = 'http://localhost:5000';
+  const API_BASE_URL = 'http://localhost:5002';
 
   // Check API connection on component mount
   useEffect(() => {

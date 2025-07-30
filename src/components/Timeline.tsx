@@ -51,7 +51,6 @@ export const Timeline: React.FC<TimelineProps> = ({
     // Ensure time is within valid range and duration is not zero
     if (duration <= 0) return 0;
     const position = (time / duration) * 100;
-    console.log('Position calculation:', { time, duration, position });
     return Math.max(0, Math.min(100, position));
   };
 
@@ -172,8 +171,6 @@ export const Timeline: React.FC<TimelineProps> = ({
             const isAutoZoom = zoom.type === 'autozoom';
             const startPos = getPositionFromTime(zoom.startTime);
             const width = getPositionFromTime(zoom.endTime - zoom.startTime);
-            
-            console.log('Rendering zoom effect:', { id: zoom.id, type: zoom.type, startPos, width });
             
             return (
               <div

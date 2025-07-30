@@ -1,6 +1,23 @@
 import React, { useState } from 'react';
-import { X, Download, CheckCircle, AlertCircle } from 'lucide-react';
-import { ZoomEffect, TextOverlay } from '../types';
+import { X, Download } from 'lucide-react';
+import { getInterpolatedZoom, ZoomEffect } from '../types';
+
+interface TextOverlay {
+  id: string;
+  text: string;
+  startTime: number;
+  endTime: number;
+  x: number;
+  y: number;
+  fontSize?: number;
+  color?: string;
+  fontFamily?: string;
+  backgroundColor?: string;
+  padding?: string | number;
+  borderRadius?: string | number;
+  border?: string;
+  boxShadow?: string;
+}
 
 interface ExportModalProps {
   videoFile: File;
@@ -10,44 +27,6 @@ interface ExportModalProps {
   onClose: () => void;
 }
 
-// --- Helper: Linear interpolation ---
-function lerp(a: number, b: number, t: number) {
-  return a + (b - a) * t;
-}
-
-// --- Robust zoom interpolation (matches preview exactly) ---
-function getInterpolatedZoom(time: number, zooms: ZoomEffect[]) {
-  if (!zooms.length) return { x: 50, y: 50, scale: 1.0 };
-  const sorted = [...zooms].sort((a, b) => a.startTime - b.startTime);
-
-  // Before first zoom
-  if (time <= sorted[0].startTime) return sorted[0];
-
-  // After last zoom
-  if (time >= sorted[sorted.length - 1].endTime) return sorted[sorted.length - 1];
-
-  // Find the zoom window we're in
-  for (let i = 0; i < sorted.length; i++) {
-    const zA = sorted[i];
-    const zB = sorted[i + 1];
-
-    // Static hold within a zoom
-    if (time >= zA.startTime && time <= zA.endTime) return zA;
-
-    // Interpolate between zA (end) and zB (start)
-    if (zB && time > zA.endTime && time < zB.startTime) {
-      const t = (time - zA.endTime) / (zB.startTime - zA.endTime);
-      return {
-        x: lerp(zA.x, zB.x, t),
-        y: lerp(zA.y, zB.y, t),
-        scale: lerp(zA.scale, zB.scale, t),
-      };
-    }
-  }
-  return sorted[sorted.length - 1];
-}
-
-// --- ExportModal Component ---
 export const ExportModal: React.FC<ExportModalProps> = ({
   videoFile,
   zoomEffects,
@@ -60,169 +39,465 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [exportStatus, setExportStatus] = useState<'idle' | 'processing' | 'complete' | 'error'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
 
-  // --- Step 1: Bake all edits to a webm (browser, canvas+audio) ---
-  async function bakeEditedWebM(): Promise<Blob> {
-    return new Promise((resolve, reject) => {
+  // --- Server-side export with fallback to client-side ---
+  async function serverSideExport(): Promise<void> {
+    try {
+      setErrorMessage('Preparing video for server-side processing...');
+      setExportProgress(10);
+
+      // Use FormData instead of base64 to avoid stack overflow
+      const formData = new FormData();
+      formData.append('videoFile', videoFile);
+      formData.append('duration', duration.toString());
+      formData.append('zoomEffects', JSON.stringify(zoomEffects));
+      formData.append('textOverlays', JSON.stringify(textOverlays));
+      formData.append('fps', '30');
+      
+      setExportProgress(20);
+      setErrorMessage('Sending to server for processing...');
+
+      console.log('Sending export request to server...');
+      const response = await fetch('http://localhost:5002/export-with-effects', {
+        method: 'POST',
+        body: formData,
+      });
+      console.log('Server response status:', response.status);
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Server error: ${response.status}`);
+      }
+
+      setExportProgress(80);
+      setErrorMessage('Downloading processed video...');
+
+      // Download the file
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'exported_video.mp4';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+
+      setExportProgress(100);
+      setErrorMessage('Export completed successfully!');
+    } catch (err: any) {
+      console.error('Server-side export failed:', err);
+      console.error('Error details:', {
+        message: err.message,
+        stack: err.stack,
+        name: err.name
+      });
+      throw err; // Re-throw to trigger fallback
+    }
+  }
+
+  // --- Robust client-side fallback export with real progress and error handling ---
+  async function clientSideExportFallback(): Promise<void> {
+    try {
+      console.log('Exporting with zoomEffects:', zoomEffects);
+      console.log('Exporting with textOverlays:', textOverlays);
+      
+      // Verify zoom effects are properly structured
+      const validZooms = zoomEffects.filter(z => 
+        typeof z.startTime === 'number' && 
+        typeof z.endTime === 'number' && 
+        typeof z.x === 'number' && 
+        typeof z.y === 'number' && 
+        typeof z.scale === 'number' &&
+        z.startTime < z.endTime
+      );
+      
+      console.log('Valid zooms for export:', validZooms.length, 'out of', zoomEffects.length);
+      validZooms.forEach((zoom, index) => {
+        console.log(`Zoom ${index}:`, {
+          id: zoom.id,
+          startTime: zoom.startTime.toFixed(3),
+          endTime: zoom.endTime.toFixed(3),
+          x: zoom.x.toFixed(2),
+          y: zoom.y.toFixed(2),
+          scale: zoom.scale.toFixed(3)
+        });
+      });
+      
+      setErrorMessage('Loading video for browser processing...');
+      setExportProgress(10);
+
       const video = document.createElement('video');
       video.src = URL.createObjectURL(videoFile);
-      video.crossOrigin = 'anonymous';
-      video.preload = 'auto';
-      video.muted = false;
+      video.muted = true;
+      video.playsInline = true;
 
-      video.onloadedmetadata = async () => {
-        const w = video.videoWidth, h = video.videoHeight;
-        const canvas = document.createElement('canvas');
-        canvas.width = w; canvas.height = h;
-        const ctx = canvas.getContext('2d')!;
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => reject(new Error('Video load timeout')), 10000);
+        video.onloadedmetadata = () => {
+          clearTimeout(timeout);
+          setExportProgress(15);
+          resolve();
+        };
+        video.onerror = () => {
+          clearTimeout(timeout);
+          reject(new Error('Video load failed'));
+        };
+      });
 
-        // Audio context setup
-        const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const srcNode = audioCtx.createMediaElementSource(video);
-        const dest = audioCtx.createMediaStreamDestination();
-        srcNode.connect(dest);
+      setErrorMessage('Setting up canvas for frame processing...');
+      const width = video.videoWidth || 1280;
+      const height = video.videoHeight || 720;
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d', { alpha: false }); // Optimize for performance
+      if (!ctx) throw new Error('Failed to get canvas context');
 
-        // MediaRecorder setup
-        const stream = canvas.captureStream(30);
-        dest.stream.getAudioTracks().forEach(t => stream.addTrack(t));
-        const rec = new MediaRecorder(stream, { mimeType: 'video/webm; codecs=vp9,opus' });
-        const chunks: Blob[] = [];
-        rec.ondataavailable = e => e.data.size && chunks.push(e.data);
-        rec.onstop = () => {
-          audioCtx.close();
+      const stream = canvas.captureStream(30);
+      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+      // Note: Canvas capture doesn't include audio, so we'll use mux-audio endpoint
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = e => chunks.push(e.data);
+      const recordingPromise = new Promise<Blob>((resolve) => {
+        recorder.onstop = () => {
           resolve(new Blob(chunks, { type: 'video/webm' }));
         };
+      });
 
-        rec.start(100);
+      setExportProgress(20);
+      setErrorMessage('Starting frame-by-frame processing...');
+      recorder.start();
 
-        // --- Frame Rendering Loop ---
-        let stopped = false;
-        let lastDrawTime = -1;
+      const fps = 30;
+      const actualDuration = video.duration;
+      // Calculate exact frame count to match original video duration precisely
+      const totalFrames = Math.ceil(actualDuration * fps); // Use ceil instead of floor to ensure full duration
+      
+      console.log('Export settings:', {
+        actualDuration,
+        totalFrames,
+        fps,
+        expectedDuration: totalFrames / fps,
+        zoomEffectsCount: zoomEffects.length
+      });
 
-        function draw() {
-          if (stopped) return;
-          const t = video.currentTime;
+      // Process all zooms once - outside the loop for consistency
+      const exportReadyZooms = zoomEffects
+        .filter(z => z.startTime < actualDuration && z.endTime > 0)
+        .map(z => ({
+          ...z,
+          startTime: Math.max(0, Math.min(z.startTime, actualDuration)),
+          endTime: Math.max(0, Math.min(z.endTime, actualDuration)),
+        }))
+        .sort((a, b) => a.startTime - b.startTime);
 
-          // Key: always use *interpolated* zoom at current time
-          const { x: zx, y: zy, scale: zs } = getInterpolatedZoom(t, zoomEffects);
+      // Debug: Log all zooms being processed
+      console.log('[EXPORT ZOOMS DEBUG]', {
+        originalZoomEffects: zoomEffects.length,
+        exportReadyZooms: exportReadyZooms.length,
+        actualDuration,
+        allZooms: exportReadyZooms.map(z => ({
+          id: z.id,
+          startTime: z.startTime.toFixed(3),
+          endTime: z.endTime.toFixed(3),
+          x: z.x.toFixed(2),
+          y: z.y.toFixed(2),
+          scale: z.scale.toFixed(3)
+        }))
+      });
 
-          ctx.clearRect(0, 0, w, h);
-          const zw = w / zs, zh = h / zs;
-          ctx.drawImage(
-            video,
-            Math.max(0, Math.min(w * zx / 100 - zw / 2, w - zw)),
-            Math.max(0, Math.min(h * zy / 100 - zh / 2, h - zh)),
-            Math.min(zw, w), Math.min(zh, h), 0, 0, w, h
-          );
+      // Test zoom interpolation for key frames
+      const testTimes = [0, actualDuration / 4, actualDuration / 2, actualDuration * 3 / 4, actualDuration];
+      console.log('Testing zoom interpolation at key times:');
+      testTimes.forEach(time => {
+        const testZoom = getInterpolatedZoom(time, exportReadyZooms);
+        console.log(`Time ${time.toFixed(3)}s:`, {
+          id: testZoom.id,
+          x: testZoom.x.toFixed(2),
+          y: testZoom.y.toFixed(2),
+          scale: testZoom.scale.toFixed(3)
+        });
+      });
 
-          // Draw text overlays
-          textOverlays.filter(tx => t >= tx.startTime && t <= tx.endTime).forEach(tx => {
-            ctx.save();
-            ctx.font = `${tx.fontSize || 24}px ${tx.fontFamily || 'Arial'}`;
-            ctx.fillStyle = tx.color || "#fff";
-            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-            if (tx.backgroundColor) {
-              const tm = ctx.measureText(tx.text);
-              ctx.fillStyle = tx.backgroundColor;
-              ctx.fillRect(
-                w * tx.x / 100 - tm.width / 2 - 8,
-                h * tx.y / 100 - (tx.fontSize || 24) / 2 - 8,
-                tm.width + 16, (tx.fontSize || 24) + 16
-              );
-              ctx.fillStyle = tx.color || "#fff";
+      async function seekTo(time: number) {
+        return new Promise<void>((resolve) => {
+          let resolved = false;
+          const onSeeked = () => {
+            if (!resolved) {
+              resolved = true;
+              video.removeEventListener('seeked', onSeeked);
+              resolve();
             }
-            ctx.fillText(tx.text, w * tx.x / 100, h * tx.y / 100);
-            ctx.restore();
+          };
+          video.addEventListener('seeked', onSeeked);
+          video.currentTime = time;
+          setTimeout(() => {
+            if (!resolved) {
+              video.removeEventListener('seeked', onSeeked);
+              resolve();
+            }
+          }, 100);
+        });
+      }
+
+      for (let frame = 0; frame < totalFrames; frame++) {
+        // Calculate exact time for this frame, ensure we process the full duration
+        const currentTime = Math.min(frame / fps, actualDuration);
+        
+        const interpolatedZoom = getInterpolatedZoom(currentTime, exportReadyZooms);
+        
+        // Debug: Track which zoom is active for each frame (reduced frequency)
+        if (frame % 90 === 0) { // Log every 3 seconds at 30fps
+          console.log('[ZOOM ACTIVE]', {
+            frame,
+            currentTime: currentTime.toFixed(3),
+            activeZoomId: interpolatedZoom.id,
+            activeZoomScale: interpolatedZoom.scale.toFixed(3),
+            activeZoomPosition: `${interpolatedZoom.x.toFixed(1)}%, ${interpolatedZoom.y.toFixed(1)}%`
           });
-
-          // Progress
-          setExportProgress(Math.floor((t / video.duration) * 80));
-
-          // Keep drawing until video ends or exporting stops
-          if (!video.paused && !video.ended && !stopped) {
-            requestAnimationFrame(draw);
+        }
+        
+        // Debug: Track zoom changes (only log changes, not every frame)
+        if (frame > 0) {
+          const previousTime = Math.min((frame - 1) / fps, actualDuration);
+          const previousZoom = getInterpolatedZoom(previousTime, exportReadyZooms);
+          if (previousZoom.id !== interpolatedZoom.id) {
+            console.log('[ZOOM CHANGE]', {
+              frame,
+              time: currentTime.toFixed(3),
+              from: previousZoom.id,
+              to: interpolatedZoom.id,
+              fromScale: previousZoom.scale.toFixed(3),
+              toScale: interpolatedZoom.scale.toFixed(3)
+            });
           }
         }
-
-        // --- Safeguards ---
-        let failTimeout = setTimeout(() => {
-          stopped = true;
-          rec.stop();
-          reject(new Error("Rendering timed out."));
-        }, (video.duration + 10) * 1000);
-
-        video.onended = () => {
-          if (!stopped) {
-            stopped = true;
-            clearTimeout(failTimeout);
-            setExportProgress(90);
-            setTimeout(() => rec.stop(), 100); // allow for last chunk
+        
+        // Optimized seek operation
+        if (Math.abs(video.currentTime - currentTime) > 0.1) {
+          video.currentTime = currentTime;
+          // Reduced wait time for video to be ready
+          let tries = 0;
+          while (video.readyState < 2 && tries < 5) {
+            await new Promise(r => setTimeout(r, 5));
+            tries++;
           }
-        };
-
-        video.onerror = () => {
-          stopped = true;
-          clearTimeout(failTimeout);
-          rec.stop();
-          reject(new Error("Failed to load video!"));
-        };
-
-        video.onpause = () => {
-          // Don't stop recording! Just keep waiting
-        };
-
-        video.onplay = () => {
-          if (!stopped) requestAnimationFrame(draw);
-        };
-
-        // Start playback and draw loop
-        try {
-          await video.play();
-        } catch (e) {
-          stopped = true;
-          clearTimeout(failTimeout);
-          rec.stop();
-          reject(new Error("Playback error: " + e));
         }
-      };
-
-      video.onerror = () => reject(new Error("Failed to load video metadata!"));
-    });
-  }
-
-  // --- Step 2: Send webm to backend and auto-download mp4 ---
-  async function sendWebmAndDownloadMp4(webmBlob: Blob) {
-    const formData = new FormData();
-    formData.append('file', webmBlob, 'video.webm');
-    const response = await fetch('http://localhost:5001/convert', {
-      method: 'POST',
-      body: formData
-    });
-    if (!response.ok) throw new Error('MP4 conversion failed');
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'exported.mp4';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-      URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-    }, 600);
-  }
-
-  // --- Step 3: Main export handler ---
-  const handleExport = async () => {
-    setIsExporting(true); setExportStatus('processing'); setExportProgress(0); setErrorMessage('');
-    try {
-      setErrorMessage("Rendering all edits (zooms, overlays, audio)...");
-      const webmBlob = await bakeEditedWebM();
-      setExportProgress(90);
-      setErrorMessage("Converting to MP4 and downloading...");
-      await sendWebmAndDownloadMp4(webmBlob);
+        
+        // Ensure we don't process beyond the actual video duration
+        if (currentTime > actualDuration) {
+          break;
+        }
+        
+        ctx.clearRect(0, 0, width, height);
+        ctx.save();
+        
+        // Apply zoom transformation - optimized
+        const { x, y, scale } = interpolatedZoom;
+        if (scale !== 1.0 || x !== 50 || y !== 50) {
+          // Calculate offsets exactly like the preview
+          const offsetX = (50 - x) * (scale - 1);
+          const offsetY = (50 - y) * (scale - 1);
+          
+          // Apply the same transformation as the preview CSS:
+          ctx.scale(scale, scale);
+          ctx.translate((offsetX / 100) * width, (offsetY / 100) * height);
+        }
+        
+        // Draw the video frame
+        ctx.drawImage(video, 0, 0, width, height);
+        ctx.restore();
+        
+        // Apply text overlays - optimized
+        for (const overlay of textOverlays) {
+          if (currentTime >= overlay.startTime && currentTime <= overlay.endTime) {
+            ctx.save();
+            ctx.fillStyle = overlay.color || '#ffffff';
+            ctx.font = `bold ${overlay.fontSize || 24}px ${overlay.fontFamily || 'Arial, sans-serif'}`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            
+            // Add shadow for better visibility
+            ctx.shadowColor = 'rgba(0,0,0,0.8)';
+            ctx.shadowBlur = 4;
+            ctx.shadowOffsetX = 2;
+            ctx.shadowOffsetY = 2;
+            
+            const x = (overlay.x / 100) * width;
+            const y = (overlay.y / 100) * height;
+            
+            // Draw background if specified
+            if (overlay.backgroundColor && overlay.backgroundColor !== 'transparent') {
+              const textMetrics = ctx.measureText(overlay.text);
+              const padding = Number(overlay.padding) || 0;
+              const bgWidth = textMetrics.width + (padding * 2);
+              const bgHeight = (overlay.fontSize || 24) + (padding * 2);
+              
+              ctx.fillStyle = overlay.backgroundColor;
+              ctx.fillRect(
+                x - bgWidth / 2,
+                y - bgHeight / 2,
+                bgWidth,
+                bgHeight
+              );
+              ctx.fillStyle = overlay.color || '#ffffff';
+            }
+            
+            ctx.fillText(overlay.text, x, y);
+            ctx.restore();
+          }
+        }
+        
+        const frameProgress = Math.floor((frame / totalFrames) * 70);
+        setExportProgress(20 + frameProgress);
+        setErrorMessage(`Processing frame ${frame + 1} of ${totalFrames} (${Math.floor((frame / totalFrames) * 100)}%)`);
+        
+        // Log summary on last frame
+        if (frame === totalFrames - 1) {
+          console.log('[EXPORT SUMMARY]', {
+            totalFrames,
+            totalZooms: exportReadyZooms.length,
+            zooms: exportReadyZooms.map((z: any) => ({
+              id: z.id,
+              startTime: z.startTime.toFixed(3),
+              endTime: z.endTime.toFixed(3),
+              x: z.x.toFixed(2),
+              y: z.y.toFixed(2),
+              scale: z.scale.toFixed(3)
+            }))
+          });
+        }
+      }
+      
+      // Stop the recorder immediately after the last frame to avoid extra frames
+      recorder.stop();
+      console.log('Recording stopped, waiting for blob...');
+      
+      const webmBlob = await recordingPromise;
+      console.log('WebM blob created, size:', webmBlob.size);
+      
+      // Debug: Check if WebM blob is valid
+      if (webmBlob.size === 0) {
+        throw new Error('WebM blob is empty - zoom processing failed');
+      }
+      
+      // Debug: Create a temporary URL to test the WebM
+      const webmUrl = URL.createObjectURL(webmBlob);
+      console.log('WebM URL created:', webmUrl);
+      
+      // Debug: Test if WebM can be played
+      const testVideo = document.createElement('video');
+      testVideo.src = webmUrl;
+      testVideo.muted = true;
+      testVideo.playsInline = true;
+      
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          URL.revokeObjectURL(webmUrl);
+          reject(new Error('WebM test timeout'));
+        }, 5000);
+        
+        testVideo.onloadedmetadata = () => {
+          clearTimeout(timeout);
+          console.log('WebM test successful - duration:', testVideo.duration, 'size:', testVideo.videoWidth, 'x', testVideo.videoHeight);
+          URL.revokeObjectURL(webmUrl);
+          resolve();
+        };
+        
+        testVideo.onerror = () => {
+          clearTimeout(timeout);
+          URL.revokeObjectURL(webmUrl);
+          reject(new Error('WebM test failed - invalid video data'));
+        };
+      });
+      
+      // Optional: Download WebM for testing (uncomment to test)
+      // const webmDownloadUrl = URL.createObjectURL(webmBlob);
+      // const webmLink = document.createElement('a');
+      // webmLink.href = webmDownloadUrl;
+      // webmLink.download = `test_webm_${Date.now()}.webm`;
+      // document.body.appendChild(webmLink);
+      // webmLink.click();
+      // document.body.removeChild(webmLink);
+      // URL.revokeObjectURL(webmDownloadUrl);
+      
+      setExportProgress(95);
+      setErrorMessage('Processing with original audio...');
+      
+      // Send both rendered video and original audio for muxing
+      const formData = new FormData();
+      formData.append('rendered', webmBlob, 'rendered.webm');
+      formData.append('original', videoFile);
+      
+      console.log('Sending to server for audio muxing...');
+      const response = await fetch('http://localhost:5002/mux-audio', {
+        method: 'POST',
+        body: formData
+      });
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Server error:', errorText);
+        throw new Error(`Audio muxing failed: ${errorText}`);
+      }
+      
+      setExportProgress(98);
+      setErrorMessage('Downloading final video...');
+      const finalMp4Blob = await response.blob();
+      console.log('Final MP4 blob received, size:', finalMp4Blob.size);
+      const url = URL.createObjectURL(finalMp4Blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `exported_video_${Date.now()}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+      }, 1000);
       setExportProgress(100);
+      setErrorMessage('Export completed successfully!');
+      console.log('Export completed successfully!');
+    } catch (err: any) {
+      setExportProgress(100);
+      setErrorMessage('Export failed: ' + (err.message || err.toString()));
+      throw err;
+    }
+  }
+
+  const handleExport = async () => {
+    setIsExporting(true);
+    setExportStatus('processing');
+    setExportProgress(0);
+    setErrorMessage('');
+    try {
+      if (!videoFile) {
+        throw new Error('No video file selected');
+      }
+      if (duration <= 0) {
+        throw new Error('Invalid video duration');
+      }
+      
+      // Debug: Log all zooms being passed to export
+      console.log('[EXPORT INPUT DEBUG]', {
+        totalZoomEffects: zoomEffects.length,
+        duration,
+        allZooms: zoomEffects.map(z => ({
+          id: z.id,
+          startTime: z.startTime.toFixed(3),
+          endTime: z.endTime.toFixed(3),
+          x: z.x.toFixed(2),
+          y: z.y.toFixed(2),
+          scale: z.scale.toFixed(3)
+        }))
+      });
+      
+      // Always use client-side export for accurate zoom effects and timeline edits
+      console.log('Using client-side export for accurate timeline effects');
+      await clientSideExportFallback();
       setExportStatus('complete');
-      setErrorMessage('');
     } catch (e: any) {
+      console.error('Export failed:', e);
       setExportStatus('error');
       setErrorMessage(e.message || 'Export failed');
     } finally {
@@ -230,7 +505,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     }
   };
 
-  // --- UI ---
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-gray-800 rounded-xl max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto">
@@ -244,7 +518,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           {isExporting && (
             <div>
               <div className="flex justify-between text-sm text-gray-300 mb-2">
-                <span>Processing video with all edits...</span>
+                <span>Exporting video with effects...</span>
                 <span>{exportProgress.toFixed(0)}%</span>
               </div>
               <div className="w-full bg-gray-600 rounded-full h-2">
@@ -255,39 +529,44 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               </div>
             </div>
           )}
-          {exportStatus === 'error' && errorMessage && (
-            <div className="p-3 bg-red-900/50 border border-red-700 rounded-lg flex items-center space-x-2">
-              <AlertCircle className="w-4 h-4 text-red-400" />
-              <span className="text-red-300 text-sm">{errorMessage}</span>
+          {errorMessage && (
+            <div className={`p-4 rounded-lg ${
+              exportStatus === 'complete' 
+                ? 'bg-green-500 bg-opacity-20 text-green-100' 
+                : 'bg-red-500 bg-opacity-20 text-red-100'
+            }`}>
+              <p className="text-sm">{errorMessage}</p>
             </div>
           )}
-          {exportStatus === 'complete' && (
-            <div className="p-3 bg-green-900/50 border border-green-700 rounded-lg flex items-center space-x-2">
-              <CheckCircle className="w-4 h-4 text-green-400" />
-              <span className="text-green-300 text-sm">
-                Video exported and downloaded as MP4 with all edits!
-              </span>
-            </div>
-          )}
-        </div>
-        <div className="flex space-x-3 p-6 border-t border-gray-700 bg-gray-800 rounded-b-xl">
-          <button
-            onClick={onClose}
-            className="flex-1 py-3 px-4 bg-gray-600 hover:bg-gray-700 text-white rounded-lg"
-            disabled={isExporting}
-          >{exportStatus === 'complete' ? 'Close' : 'Cancel'}</button>
-          <button
-            onClick={handleExport}
-            disabled={isExporting || exportStatus === 'complete'}
-            className={`flex-1 flex items-center justify-center space-x-2 py-3 px-4 rounded-lg transition-colors font-medium ${
-              !isExporting && exportStatus !== 'complete'
-                ? 'bg-gradient-to-r from-purple-600 to-green-600 hover:from-purple-700 hover:to-green-700 text-white'
-                : 'bg-gray-500 text-gray-300 cursor-not-allowed'
-            }`}
-          >
-            <Download className="w-5 h-5" />
-            <span>{isExporting ? "Exporting..." : "Export with All Edits"}</span>
-          </button>
+          <div className="flex justify-end space-x-2">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 bg-gray-700 text-white rounded-md hover:bg-gray-600 transition-colors"
+              disabled={isExporting}
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleExport}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+              disabled={isExporting}
+            >
+              {isExporting ? (
+                <div className="flex items-center">
+                  <svg className="animate-spin mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Exporting...
+                </div>
+              ) : (
+                <div className="flex items-center">
+                  <Download className="w-4 h-4 mr-2" />
+                  Export
+                </div>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>

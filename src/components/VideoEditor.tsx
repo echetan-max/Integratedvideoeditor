@@ -19,6 +19,7 @@ export const VideoEditor: React.FC = () => {
   const [zoomEffects, setZoomEffects] = useState<ZoomEffect[]>([]);
   const [selectedZoom, setSelectedZoom] = useState<ZoomEffect | null>(null);
   const [textOverlays, setTextOverlays] = useState<TextOverlay[]>([]);
+  const [previewTextOverlay, setPreviewTextOverlay] = useState<TextOverlay | null>(null);
   const [showExportModal, setShowExportModal] = useState(false);
   const [showSakImport, setShowSakImport] = useState(false);
   const [showAutoZoomRecorder, setShowAutoZoomRecorder] = useState(false);
@@ -88,6 +89,7 @@ export const VideoEditor: React.FC = () => {
   // Text overlay functions
   const addTextOverlay = (textOverlay: TextOverlay) => {
     setTextOverlays(prev => [...prev, textOverlay]);
+    setPreviewTextOverlay(null); // Clear preview when text is added
   };
 
   const updateTextOverlay = (id: string, updates: Partial<TextOverlay>) => {
@@ -98,6 +100,10 @@ export const VideoEditor: React.FC = () => {
 
   const deleteTextOverlay = (id: string) => {
     setTextOverlays(prev => prev.filter(text => text.id !== id));
+  };
+
+  const setPreviewText = (preview: TextOverlay | null) => {
+    setPreviewTextOverlay(preview);
   };
 
   const handleTimeUpdate = (time: number) => {
@@ -329,6 +335,8 @@ export const VideoEditor: React.FC = () => {
               onDeleteText={deleteTextOverlay}
               currentTime={currentTime}
               duration={duration}
+              setPreviewText={setPreviewText}
+              previewTextOverlay={previewTextOverlay}
             />
           </div>
         </div>
@@ -352,6 +360,7 @@ export const VideoEditor: React.FC = () => {
               return interpolatedZoom;
             })()}
             textOverlays={textOverlays}
+            previewTextOverlay={previewTextOverlay}
             onVideoClick={(x, y) => {
               if (zoomEnabled && !selectedZoom) {
                 const startTime = currentTime;

@@ -12,6 +12,7 @@ interface VideoPlayerProps {
   onPause: () => void;
   currentZoom: ZoomEffect | null;
   textOverlays: TextOverlay[];
+  previewTextOverlay?: TextOverlay | null;
   onVideoClick: (x: number, y: number) => void;
   onSeeked?: () => void; // NEW
 }
@@ -23,7 +24,7 @@ export interface VideoPlayerRef {
 }
 
 export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
-  ({ src, currentTime, isPlaying, onTimeUpdate, onLoadedMetadata, onPlay, onPause, currentZoom, textOverlays, onVideoClick, onSeeked }, ref) => {
+  ({ src, currentTime, isPlaying, onTimeUpdate, onLoadedMetadata, onPlay, onPause, currentZoom, textOverlays, previewTextOverlay, onVideoClick, onSeeked }, ref) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const videoWrapperRef = useRef<HTMLDivElement>(null);
@@ -415,6 +416,36 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                 </div>
               );
             })}
+
+            {/* Preview Text Overlay - Shows while typing */}
+            {previewTextOverlay && (
+              <div
+                className="absolute pointer-events-none z-30"
+                style={{
+                  left: `${previewTextOverlay.x}%`,
+                  top: `${previewTextOverlay.y}%`,
+                  transform: 'translate(-50%, -50%)',
+                  fontFamily: previewTextOverlay.fontFamily || 'Arial, sans-serif',
+                  fontSize: `${previewTextOverlay.fontSize || 24}px`,
+                  color: previewTextOverlay.color || '#ffffff',
+                  backgroundColor: previewTextOverlay.backgroundColor || 'transparent',
+                  padding: `${previewTextOverlay.padding || 0}px`,
+                  borderRadius: `${previewTextOverlay.borderRadius || 0}px`,
+                  whiteSpace: 'pre-wrap',
+                  textAlign: 'center',
+                  textShadow: '2px 2px 4px rgba(0,0,0,0.8)',
+                  boxShadow: previewTextOverlay.backgroundColor ? '2px 2px 8px rgba(0,0,0,0.5)' : 'none',
+                  maxWidth: '80%',
+                  wordWrap: 'break-word',
+                  fontWeight: 'bold',
+                  lineHeight: '1.2',
+                  border: '2px dashed #00ff00', // Green dashed border to indicate preview
+                  opacity: 0.9
+                }}
+              >
+                {previewTextOverlay.text}
+              </div>
+            )}
           </div>
         </div>
 

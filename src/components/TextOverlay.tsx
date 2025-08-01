@@ -9,6 +9,8 @@ interface TextOverlayProps {
   onDeleteText: (id: string) => void;
   currentTime: number;
   duration: number;
+  setPreviewText: (preview: TextOverlay | null) => void;
+  previewTextOverlay: TextOverlay | null;
 }
 
 export const TextOverlayComponent: React.FC<TextOverlayProps> = ({
@@ -17,7 +19,9 @@ export const TextOverlayComponent: React.FC<TextOverlayProps> = ({
   onUpdateText,
   onDeleteText,
   currentTime,
-  duration
+  duration,
+  setPreviewText,
+  previewTextOverlay
 }) => {
   const [isAddingText, setIsAddingText] = useState(false);
   const [newText, setNewText] = useState('');
@@ -27,6 +31,32 @@ export const TextOverlayComponent: React.FC<TextOverlayProps> = ({
   const [fontFamily, setFontFamily] = useState('Arial');
   const [padding, setPadding] = useState(8);
   const [borderRadius, setBorderRadius] = useState(4);
+  const [previewPosition, setPreviewPosition] = useState({ x: 50, y: 50 });
+
+  // Live preview text overlay for when adding new text
+  const currentPreviewTextOverlay: TextOverlay = {
+    id: 'preview',
+    startTime: currentTime,
+    endTime: currentTime + 3,
+    x: previewPosition.x,
+    y: previewPosition.y,
+    text: newText || 'Preview Text',
+    fontSize,
+    color,
+    fontFamily,
+    backgroundColor,
+    padding,
+    borderRadius
+  };
+
+  // Update preview when text or styling changes
+  React.useEffect(() => {
+    if (isAddingText) {
+      setPreviewText(currentPreviewTextOverlay);
+    } else {
+      setPreviewText(null);
+    }
+  }, [isAddingText, newText, fontSize, color, backgroundColor, fontFamily, padding, borderRadius, previewPosition, currentTime]);
 
   const handleAddText = () => {
     if (newText.trim()) {
@@ -34,8 +64,8 @@ export const TextOverlayComponent: React.FC<TextOverlayProps> = ({
         id: Date.now().toString(),
         startTime: currentTime,
         endTime: Math.min(currentTime + 3, duration),
-        x: 50,
-        y: 50,
+        x: previewPosition.x,
+        y: previewPosition.y,
         text: newText,
         fontSize,
         color,
@@ -47,6 +77,7 @@ export const TextOverlayComponent: React.FC<TextOverlayProps> = ({
       onAddText(textOverlay);
       setNewText('');
       setIsAddingText(false);
+      setPreviewText(null);
     }
   };
 

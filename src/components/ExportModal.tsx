@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X, Download } from 'lucide-react';
-import { getInterpolatedZoom, ZoomEffect } from '../types';
+import { getInterpolatedZoom, ZoomEffect, lerp } from '../types';
 
 interface TextOverlay {
   id: string;
@@ -123,6 +123,118 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         });
       });
       
+      // Helper function for smooth zoom interpolation (export only)
+      function getSmoothExportZoom(time: number, zooms: ZoomEffect[]): ZoomEffect {
+        if (!zooms.length) {
+          return {
+            id: 'default',
+            startTime: 0,
+            endTime: Number.MAX_SAFE_INTEGER,
+            x: 50,
+            y: 50,
+            scale: 1.0,
+            transition: 'smooth',
+          };
+        }
+
+        const sorted = [...zooms].sort((a, b) => a.startTime - b.startTime);
+        
+        if (time < sorted[0].startTime) {
+          return {
+            id: 'default',
+            startTime: 0,
+            endTime: sorted[0].startTime,
+            x: 50,
+            y: 50,
+            scale: 1.0,
+            transition: 'smooth',
+          };
+        }
+
+        if (time > sorted[sorted.length - 1].endTime) {
+          return {
+            id: 'default',
+            startTime: sorted[sorted.length - 1].endTime,
+            endTime: Number.MAX_SAFE_INTEGER,
+            x: 50,
+            y: 50,
+            scale: 1.0,
+            transition: 'smooth',
+          };
+        }
+
+        for (let i = 0; i < sorted.length; i++) {
+          const currentZoom = sorted[i];
+          
+          if (time >= currentZoom.startTime && time <= currentZoom.endTime) {
+            // Use longer, smoother transitions for better quality
+            const transitionDuration = 2.0; // 2 seconds for very smooth transitions
+            const actualTransitionDuration = Math.min(transitionDuration, (currentZoom.endTime - currentZoom.startTime) / 2);
+            
+            // Transition from normal view to zoom
+            if (time < currentZoom.startTime + actualTransitionDuration) {
+              const progress = Math.max(0, Math.min(1, (time - currentZoom.startTime) / actualTransitionDuration));
+              // Use very smooth easing function for natural motion
+              const easedProgress = 1 - Math.pow(1 - progress, 5); // Ease-out quintic for very smooth motion
+              
+              // Limit scale to reasonable bounds (1.0 to 3.0 for better screen fitting)
+              const maxScale = Math.min(3.0, currentZoom.scale);
+              const safeScale = Math.max(1.0, Math.min(3.0, maxScale));
+              
+              return {
+                id: currentZoom.id,
+                startTime: currentZoom.startTime,
+                endTime: currentZoom.endTime,
+                x: lerp(50, currentZoom.x, easedProgress),
+                y: lerp(50, currentZoom.y, easedProgress),
+                scale: lerp(1.0, safeScale, easedProgress),
+                transition: 'smooth',
+              };
+            }
+            
+            // Transition from zoom to normal view
+            if (time > currentZoom.endTime - actualTransitionDuration) {
+              const progress = Math.max(0, Math.min(1, (currentZoom.endTime - time) / actualTransitionDuration));
+              // Use very smooth easing function for natural motion
+              const easedProgress = 1 - Math.pow(1 - progress, 5); // Ease-out quintic for very smooth motion
+              
+              // Limit scale to reasonable bounds
+              const maxScale = Math.min(3.0, currentZoom.scale);
+              const safeScale = Math.max(1.0, Math.min(3.0, maxScale));
+              
+              return {
+                id: currentZoom.id,
+                startTime: currentZoom.startTime,
+                endTime: currentZoom.endTime,
+                x: lerp(50, currentZoom.x, easedProgress),
+                y: lerp(50, currentZoom.y, easedProgress),
+                scale: lerp(1.0, safeScale, easedProgress),
+                transition: 'smooth',
+              };
+            }
+            
+            // Full zoom state with safe scale
+            const maxScale = Math.min(3.0, currentZoom.scale);
+            const safeScale = Math.max(1.0, Math.min(3.0, maxScale));
+            
+            return {
+              ...currentZoom,
+              scale: safeScale
+            };
+          }
+        }
+
+        return {
+          id: 'default',
+          startTime: 0,
+          endTime: Number.MAX_SAFE_INTEGER,
+          x: 50,
+          y: 50,
+          scale: 1.0,
+          transition: 'smooth',
+        };
+      }
+      
       setErrorMessage('Loading video for browser processing...');
       setExportProgress(10);
 
@@ -170,8 +282,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
       const fps = 30;
       const actualDuration = video.duration;
+      
       // Calculate exact frame count to match original video duration precisely
-      const totalFrames = Math.ceil(actualDuration * fps); // Use ceil instead of floor to ensure full duration
+      // Use Math.ceil to ensure we capture the full duration
+      const totalFrames = Math.ceil(actualDuration * fps);
       
       console.log('Export settings:', {
         actualDuration,
@@ -210,7 +324,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       const testTimes = [0, actualDuration / 4, actualDuration / 2, actualDuration * 3 / 4, actualDuration];
       console.log('Testing zoom interpolation at key times:');
       testTimes.forEach(time => {
-        const testZoom = getInterpolatedZoom(time, exportReadyZooms);
+        const testZoom = getSmoothExportZoom(time, exportReadyZooms);
         console.log(`Time ${time.toFixed(3)}s:`, {
           id: testZoom.id,
           x: testZoom.x.toFixed(2),
@@ -218,6 +332,31 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           scale: testZoom.scale.toFixed(3)
         });
       });
+
+      // Pre-calculate all frame times for precise timing
+      const frameTimes: number[] = [];
+      for (let frame = 0; frame < totalFrames; frame++) {
+        const frameTime = Math.min(frame / fps, actualDuration);
+        frameTimes.push(frameTime);
+      }
+
+      // Pre-calculate zoom states for each frame for consistency (using smooth export zoom)
+      const frameZooms: ZoomEffect[] = [];
+      for (let i = 0; i < frameTimes.length; i++) {
+        const frameTime = frameTimes[i];
+        const interpolatedZoom = getSmoothExportZoom(frameTime, exportReadyZooms);
+        frameZooms.push(interpolatedZoom);
+      }
+
+      // Pre-calculate text overlay visibility for each frame
+      const frameTextOverlays: TextOverlay[][] = [];
+      for (let i = 0; i < frameTimes.length; i++) {
+        const frameTime = frameTimes[i];
+        const activeOverlays = textOverlays.filter(overlay => 
+          frameTime >= overlay.startTime && frameTime <= overlay.endTime
+        );
+        frameTextOverlays.push(activeOverlays);
+      }
 
       async function seekTo(time: number) {
         return new Promise<void>((resolve) => {
@@ -241,10 +380,10 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       }
 
       for (let frame = 0; frame < totalFrames; frame++) {
-        // Calculate exact time for this frame, ensure we process the full duration
-        const currentTime = Math.min(frame / fps, actualDuration);
-        
-        const interpolatedZoom = getInterpolatedZoom(currentTime, exportReadyZooms);
+        // Use pre-calculated frame time for consistency
+        const currentTime = frameTimes[frame];
+        const interpolatedZoom = frameZooms[frame];
+        const activeTextOverlays = frameTextOverlays[frame];
         
         // Debug: Track which zoom is active for each frame (reduced frequency)
         if (frame % 90 === 0) { // Log every 3 seconds at 30fps
@@ -253,14 +392,14 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             currentTime: currentTime.toFixed(3),
             activeZoomId: interpolatedZoom.id,
             activeZoomScale: interpolatedZoom.scale.toFixed(3),
-            activeZoomPosition: `${interpolatedZoom.x.toFixed(1)}%, ${interpolatedZoom.y.toFixed(1)}%`
+            activeZoomPosition: `${interpolatedZoom.x.toFixed(1)}%, ${interpolatedZoom.y.toFixed(1)}%`,
+            activeTextOverlays: activeTextOverlays.length
           });
         }
         
         // Debug: Track zoom changes (only log changes, not every frame)
         if (frame > 0) {
-          const previousTime = Math.min((frame - 1) / fps, actualDuration);
-          const previousZoom = getInterpolatedZoom(previousTime, exportReadyZooms);
+          const previousZoom = frameZooms[frame - 1];
           if (previousZoom.id !== interpolatedZoom.id) {
             console.log('[ZOOM CHANGE]', {
               frame,
@@ -273,13 +412,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
           }
         }
         
-        // Optimized seek operation
-        if (Math.abs(video.currentTime - currentTime) > 0.1) {
+        // Optimized seek operation with better timing
+        if (Math.abs(video.currentTime - currentTime) > 0.05) { // Reduced threshold for more precise seeking
           video.currentTime = currentTime;
-          // Reduced wait time for video to be ready
+          // Wait for video to be ready with shorter timeout
           let tries = 0;
-          while (video.readyState < 2 && tries < 5) {
-            await new Promise(r => setTimeout(r, 5));
+          while (video.readyState < 2 && tries < 10) {
+            await new Promise(r => setTimeout(r, 2));
             tries++;
           }
         }
@@ -292,60 +431,69 @@ export const ExportModal: React.FC<ExportModalProps> = ({
         ctx.clearRect(0, 0, width, height);
         ctx.save();
         
-        // Apply zoom transformation - optimized
+        // Apply zoom transformation with precise calculations
         const { x, y, scale } = interpolatedZoom;
         if (scale !== 1.0 || x !== 50 || y !== 50) {
-          // Calculate offsets exactly like the preview
-          const offsetX = (50 - x) * (scale - 1);
-          const offsetY = (50 - y) * (scale - 1);
+          // Use the smooth export zoom calculation for better transitions
+          // This ensures the export has smooth transitions while preview stays responsive
           
-          // Apply the same transformation as the preview CSS:
-          ctx.scale(scale, scale);
-          ctx.translate((offsetX / 100) * width, (offsetY / 100) * height);
+          // Ensure scale is within bounds and properly calculated (same as smooth export)
+          const safeScale = Math.max(1.0, Math.min(3.0, scale)); // Limit to 3.0 for better screen fitting
+          
+          // Calculate offsets for proper screen fitting
+          const offsetX = (50 - x) * (safeScale - 1);
+          const offsetY = (50 - y) * (safeScale - 1);
+          
+          // Apply transformation to center the zoom properly
+          ctx.save();
+          ctx.translate(width / 2, height / 2);
+          ctx.scale(safeScale, safeScale);
+          ctx.translate(-width / 2 + (offsetX / 100) * width, -height / 2 + (offsetY / 100) * height);
+          
+          // Draw the video frame with proper scaling
+          ctx.drawImage(video, 0, 0, width, height);
+          ctx.restore();
+        } else {
+          // No zoom - draw normally
+          ctx.drawImage(video, 0, 0, width, height);
         }
         
-        // Draw the video frame
-        ctx.drawImage(video, 0, 0, width, height);
-        ctx.restore();
-        
-        // Apply text overlays - optimized
-        for (const overlay of textOverlays) {
-          if (currentTime >= overlay.startTime && currentTime <= overlay.endTime) {
-            ctx.save();
+        // Apply text overlays with precise timing
+        for (const overlay of activeTextOverlays) {
+          ctx.save();
+          ctx.fillStyle = overlay.color || '#ffffff';
+          ctx.font = `bold ${overlay.fontSize || 24}px ${overlay.fontFamily || 'Arial, sans-serif'}`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          
+          // Add shadow for better visibility
+          ctx.shadowColor = 'rgba(0,0,0,0.8)';
+          ctx.shadowBlur = 4;
+          ctx.shadowOffsetX = 2;
+          ctx.shadowOffsetY = 2;
+          
+          const x = (overlay.x / 100) * width;
+          const y = (overlay.y / 100) * height;
+          
+          // Draw background if specified
+          if (overlay.backgroundColor && overlay.backgroundColor !== 'transparent') {
+            const textMetrics = ctx.measureText(overlay.text);
+            const padding = Number(overlay.padding) || 0;
+            const bgWidth = textMetrics.width + (padding * 2);
+            const bgHeight = (overlay.fontSize || 24) + (padding * 2);
+            
+            ctx.fillStyle = overlay.backgroundColor;
+            ctx.fillRect(
+              x - bgWidth / 2,
+              y - bgHeight / 2,
+              bgWidth,
+              bgHeight
+            );
             ctx.fillStyle = overlay.color || '#ffffff';
-            ctx.font = `bold ${overlay.fontSize || 24}px ${overlay.fontFamily || 'Arial, sans-serif'}`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            
-            // Add shadow for better visibility
-            ctx.shadowColor = 'rgba(0,0,0,0.8)';
-            ctx.shadowBlur = 4;
-            ctx.shadowOffsetX = 2;
-            ctx.shadowOffsetY = 2;
-            
-            const x = (overlay.x / 100) * width;
-            const y = (overlay.y / 100) * height;
-            
-            // Draw background if specified
-            if (overlay.backgroundColor && overlay.backgroundColor !== 'transparent') {
-              const textMetrics = ctx.measureText(overlay.text);
-              const padding = Number(overlay.padding) || 0;
-              const bgWidth = textMetrics.width + (padding * 2);
-              const bgHeight = (overlay.fontSize || 24) + (padding * 2);
-              
-              ctx.fillStyle = overlay.backgroundColor;
-              ctx.fillRect(
-                x - bgWidth / 2,
-                y - bgHeight / 2,
-                bgWidth,
-                bgHeight
-              );
-              ctx.fillStyle = overlay.color || '#ffffff';
-            }
-            
-            ctx.fillText(overlay.text, x, y);
-            ctx.restore();
           }
+          
+          ctx.fillText(overlay.text, x, y);
+          ctx.restore();
         }
         
         const frameProgress = Math.floor((frame / totalFrames) * 70);

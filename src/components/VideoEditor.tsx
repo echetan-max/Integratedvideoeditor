@@ -29,14 +29,7 @@ export const VideoEditor: React.FC = () => {
 
   useEffect(() => {
     if (videoFile) {
-      console.log('Loading video file:', {
-        name: videoFile.name,
-        type: videoFile.type,
-        size: videoFile.size,
-        lastModified: videoFile.lastModified
-      });
       const url = URL.createObjectURL(videoFile);
-      console.log('Created video URL:', url);
       setVideoUrl(url);
       return () => URL.revokeObjectURL(url);
     }
